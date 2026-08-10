@@ -12,7 +12,6 @@ const NAV_ITEMS = [
   { to: '/', label: 'Overview', end: true },
   { to: '/leaderboards', label: 'Leaderboards', end: false },
   { to: '/contributors', label: 'Contributors', end: false },
-  { to: '/repos', label: 'Repositories', end: false },
   { to: '/insights', label: 'Insights', end: false },
   { to: '/pulls', label: 'Pull requests', end: false },
 ]

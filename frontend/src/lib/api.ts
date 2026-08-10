@@ -13,6 +13,7 @@ export interface Pull {
   isDraft: boolean
   repo: string
   author: string
+  isBot: boolean
   createdAt: string
   updatedAt: string
   mergedAt: string | null
@@ -54,6 +55,9 @@ export interface Contributor {
   first: string | null
   last: string | null
   largest: Pull | null
+  currentStreak: number
+  longestStreak: number
+  isBot: boolean
 }
 
 export interface RepoStat extends RepoInfo {
@@ -87,6 +91,7 @@ export interface CIBucket {
   other: number
   successRate: number
   medianDurationMin: number
+  totalMinutes: number
 }
 
 export interface WorkflowStat {
@@ -96,6 +101,8 @@ export interface WorkflowStat {
   success: number
   successRate: number
   medianDurationMin: number
+  longestDurationMin: number
+  trend: number[]
   lastRunAt: string | null
   lastConclusion: string
 }
@@ -134,23 +141,38 @@ export interface OverviewData {
   monthly: ShipBucket[]
   topContributors: Contributor[]
   largest: RankedPull[]
-  repos: RepoStat[]
-  recent: Pull[]
+  velocity: { label: string; current: number; previous: number; deltaPct: number }[]
+  bot: { botMerged: number; humanMerged: number; botPct: number; bots: string[] }
+  shipDist: { zone: string; weekday: number[]; weekdayLabels: string[]; hour: number[] }
+  bus: { top3Share: number; top: Contributor[] }
+  heatmap: { date: string; merged: number }[]
 }
 
 export interface LeaderboardData {
   metric: string
   state: string
+  order: string
   rows: RankedPull[]
   pager: Pager
+  repoOptions: RepoInfo[]
 }
 
 export interface ContributorsData {
   rows: Contributor[]
 }
 
-export interface ReposData {
-  rows: RepoStat[]
+export interface ContributorDetail {
+  login: string
+  isBot: boolean
+  contributor: Contributor
+  merged: Pull[]
+  monthly: ShipBucket[]
+  heatmap: { date: string; merged: number }[]
+}
+
+export interface ShameData {
+  longestOpen: { pull: Pull; value: number }[]
+  biggestClosed: { pull: Pull; value: number }[]
 }
 
 export interface PullsData {
@@ -161,6 +183,7 @@ export interface PullsData {
 
 export interface InsightsData {
   ship: ShipBucket[]
+  shipPrev?: ShipBucket[] // present when period=12m — same window one year earlier
   ci: CIBucket[]
   workflows: WorkflowStat[]
   ciStats: {
@@ -172,96 +195,57 @@ export interface InsightsData {
   repoOptions: RepoInfo[]
 }
 
-async function getJSON<T>(path: string): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(path)
-  } catch {
-    throw new Error('Network error — is the server reachable?')
+const json = async <T>(res: Response): Promise<T> => {
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  return (await res.json()) as T
+}
+
+const qs = (params: Record<string, string | number | undefined>): string => {
+  const u = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '' && v !== null) u.set(k, String(v))
   }
-  if (!res.ok) {
-    let detail = res.statusText
-    try {
-      const body = await res.json()
-      if (body && typeof body.error === 'string') detail = body.error
-    } catch {
-      // non-JSON error body; keep status text
-    }
-    throw new Error(`${res.status} ${detail}`.trim())
-  }
-  return res.json() as Promise<T>
+  const s = u.toString()
+  return s ? `?${s}` : ''
 }
 
-export function avatarUrl(login: string): string {
-  return `https://github.com/${login}.png?size=40`
-}
+export const getStatus = (): Promise<Status> => fetch('/api/status', { cache: 'no-store' }).then(json<Status>)
+export const getOverview = (): Promise<OverviewData> => fetch('/api/overview').then(json<OverviewData>)
+export const getContributors = (): Promise<ContributorsData> => fetch('/api/contributors').then(json<ContributorsData>)
+export const getContributor = (login: string): Promise<ContributorDetail> =>
+  fetch(`/api/contributor${qs({ login })}`).then(json<ContributorDetail>)
+export const getShame = (): Promise<ShameData> => fetch('/api/shame').then(json<ShameData>)
 
-export function getStatus(): Promise<Status> {
-  return getJSON<Status>('/api/status')
-}
-
-export function getOverview(): Promise<OverviewData> {
-  return getJSON<OverviewData>('/api/overview')
-}
-
-export function getLeaderboards(params: {
+export const getLeaderboards = (params: {
   metric?: string
   state?: string
   page?: number
-} = {}): Promise<LeaderboardData> {
-  const q = new URLSearchParams()
-  if (params.metric) q.set('metric', params.metric)
-  if (params.state) q.set('state', params.state)
-  if (params.page !== undefined) q.set('page', String(params.page))
-  const qs = q.toString()
-  return getJSON<LeaderboardData>(`/api/leaderboards${qs ? `?${qs}` : ''}`)
-}
+  order?: string
+  repo?: string
+  author?: string
+  from?: string
+  to?: string
+} = {}): Promise<LeaderboardData> => fetch(`/api/leaderboards${qs(params)}`).then(json<LeaderboardData>)
 
-export function getContributors(): Promise<ContributorsData> {
-  return getJSON<ContributorsData>('/api/contributors')
-}
-
-export function getRepos(): Promise<ReposData> {
-  return getJSON<ReposData>('/api/repos')
-}
-
-export function getPulls(params: {
+export const getPulls = (params: {
   repo?: string
   state?: string
   q?: string
   page?: number
-} = {}): Promise<PullsData> {
-  const q = new URLSearchParams()
-  if (params.repo) q.set('repo', params.repo)
-  if (params.state) q.set('state', params.state)
-  if (params.q) q.set('q', params.q)
-  if (params.page !== undefined) q.set('page', String(params.page))
-  const qs = q.toString()
-  return getJSON<PullsData>(`/api/pulls${qs ? `?${qs}` : ''}`)
-}
+  sort?: string
+  order?: string
+  bot?: string
+} = {}): Promise<PullsData> => fetch(`/api/pulls${qs(params)}`).then(json<PullsData>)
 
-export function getInsights(params: {
+export const getInsights = (params: {
   repo?: string
-  period?: '3m' | '6m' | '12m' | 'all'
-  gran?: 'week' | 'month'
-} = {}): Promise<InsightsData> {
-  const q = new URLSearchParams()
-  if (params.repo) q.set('repo', params.repo)
-  if (params.period) q.set('period', params.period)
-  if (params.gran) q.set('gran', params.gran)
-  const qs = q.toString()
-  return getJSON<InsightsData>(`/api/insights${qs ? `?${qs}` : ''}`)
+  period?: string
+  gran?: string
+} = {}): Promise<InsightsData> => fetch(`/api/insights${qs(params)}`).then(json<InsightsData>)
+
+export const triggerSync = async (): Promise<void> => {
+  const res = await fetch('/api/sync', { method: 'POST' })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
 }
 
-export async function triggerSync(): Promise<void> {
-  let res: Response
-  try {
-    res = await fetch('/api/sync', { method: 'POST' })
-  } catch {
-    throw new Error('Network error — is the server reachable?')
-  }
-  if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}`.trim())
-  }
-  await res.json()
-}
+export const avatarUrl = (login: string): string => `https://github.com/${login}.png?size=40`

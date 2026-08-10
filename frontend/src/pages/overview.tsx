@@ -1,4 +1,4 @@
-import { Lock } from 'lucide-react'
+import { Flame, TrendingDown, TrendingUp } from 'lucide-react'
 import {
   Area,
   AreaChart,
@@ -12,9 +12,7 @@ import {
 import { EmptyState } from '@/components/empty-state'
 import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
-import { PrRow } from '@/components/pr-row'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   ChartContainer,
@@ -32,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { avatarUrl, getOverview, type OverviewData } from '@/lib/api'
 import { comma, compact } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
@@ -46,64 +45,202 @@ const linesChartConfig = {
   deletions: { label: 'Deleted', color: 'var(--chart-3)' },
 } satisfies ChartConfig
 
-function Stat({
-  label,
-  value,
-  valueClassName,
-}: {
-  label: string
-  value: string
-  valueClassName?: string
-}) {
+const weekdayChartConfig = {
+  weekday: { label: 'Merged', color: 'var(--chart-1)' },
+} satisfies ChartConfig
+
+const hourChartConfig = {
+  hour: { label: 'Merged', color: 'var(--chart-1)' },
+} satisfies ChartConfig
+
+function SectionTitle({ children }: { children: string }) {
+  return <div className="text-sm font-semibold">{children}</div>
+}
+
+// Dense one-line stat strip: value + label in a single bordered row.
+function StatStrip({ data }: { data: OverviewData }) {
+  const cells: { label: string; value: string; className?: string }[] = [
+    { label: 'Pull requests', value: comma(data.stats.total) },
+    { label: 'Merged', value: comma(data.stats.merged), className: 'text-purple-600 dark:text-purple-400' },
+    { label: 'Open', value: comma(data.stats.open), className: 'text-green-600 dark:text-green-400' },
+    { label: 'Contributors', value: comma(data.contributors) },
+    { label: 'Lines added', value: compact(data.stats.additions), className: 'text-green-600 dark:text-green-400' },
+    { label: 'Lines deleted', value: compact(data.stats.deletions), className: 'text-red-600 dark:text-red-400' },
+    { label: 'Avg PR size', value: comma(Math.round(data.stats.avgDiff)) },
+    { label: 'Files changed', value: comma(data.stats.files) },
+  ]
+  return (
+    <div className="grid grid-cols-2 divide-x divide-border overflow-hidden rounded-[6px] border border-border sm:grid-cols-4 xl:grid-cols-8">
+      {cells.map((c) => (
+        <div key={c.label} className="flex flex-col gap-0.5 bg-card px-3 py-2">
+          <span className={cn('text-base font-semibold leading-tight tabular-nums', c.className)}>
+            {c.value}
+          </span>
+          <span className="text-[11px] leading-tight text-muted-foreground">{c.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function VelocityCard({ v }: { v: OverviewData['velocity'][number] }) {
+  const pct = v.deltaPct
+  const up = pct > 0
+  const flat = pct === 0
   return (
     <Card className="rounded-[6px]">
-      <CardContent className="p-4">
-        <div className={cn('text-2xl font-semibold tabular-nums', valueClassName)}>
-          {value}
+      <CardContent className="p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-muted-foreground">{v.label}</span>
+          {flat ? (
+            <span className="text-xs font-semibold tabular-nums text-muted-foreground">—</span>
+          ) : up ? (
+            <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-green-600 dark:text-green-400">
+              <TrendingUp className="size-3.5" />
+              +{pct.toFixed(0)}%
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-red-600 dark:text-red-400">
+              <TrendingDown className="size-3.5" />
+              {pct.toFixed(0)}%
+            </span>
+          )}
         </div>
-        <div className="mt-1 text-xs text-muted-foreground">{label}</div>
+        <div className="mt-1 text-xl font-semibold tabular-nums">{comma(v.current)}</div>
+        <div className="text-[11px] text-muted-foreground">
+          merged · vs {comma(v.previous)} last {v.label.replace('This ', '').toLowerCase()}
+        </div>
       </CardContent>
     </Card>
   )
 }
 
-function SectionTitle({ children }: { children: string }) {
-  return <div className="text-sm font-semibold">{children}</div>
+function BotBusCard({ data }: { data: OverviewData }) {
+  const { bot, bus } = data
+  const total = bot.humanMerged + bot.botMerged
+  const humanPct = total > 0 ? ((bot.humanMerged / total) * 100).toFixed(0) : '0'
+  const botPct = total > 0 ? ((bot.botMerged / total) * 100).toFixed(0) : '0'
+  return (
+    <Card className="rounded-[6px]">
+      <CardContent className="flex h-full flex-col justify-center gap-3 p-4">
+        <div>
+          <div className="text-xs font-medium text-muted-foreground">
+            Bot vs human merges
+          </div>
+          <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-muted">
+            <div className="bg-[var(--chart-2)]" style={{ width: `${humanPct}%` }} />
+            <div className="bg-[var(--chart-5)]" style={{ width: `${botPct}%` }} />
+          </div>
+          <div className="mt-1.5 flex justify-between text-xs tabular-nums text-muted-foreground">
+            <span className="text-green-600 dark:text-green-400">
+              Humans {comma(bot.humanMerged)} ({humanPct}%)
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-default">
+                  Bots {comma(bot.botMerged)} ({botPct}%)
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="text-xs">{bot.bots.length ? bot.bots.join(', ') : 'No bot activity'}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex -space-x-1.5">
+            {bus.top.map((c) => (
+              <img
+                key={c.login}
+                src={avatarUrl(c.login)}
+                alt=""
+                className="size-5 rounded-full ring-2 ring-card"
+                loading="lazy"
+              />
+            ))}
+          </div>
+          <span className="text-xs text-muted-foreground">
+            Top 3 authors ship <span className="font-semibold text-foreground">{bus.top3Share.toFixed(0)}%</span>{' '}
+            of merges
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function WhenWeShip({ data }: { data: OverviewData }) {
+  const weekday = data.shipDist.weekday.map((v, i) => ({
+    day: data.shipDist.weekdayLabels[i] ?? String(i),
+    merged: v,
+  }))
+  const hour = data.shipDist.hour.map((v, i) => ({ hour: `${i}h`, merged: v }))
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <Card className="rounded-[6px]">
+        <CardHeader className="pb-2">
+          <SectionTitle>Merges by weekday</SectionTitle>
+        </CardHeader>
+        <CardContent>
+          <ChartContainer config={weekdayChartConfig} className="aspect-auto h-36">
+            <BarChart data={weekday} margin={{ left: 0, right: 4, top: 4 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={6} />
+              <YAxis hide />
+              <ChartTooltip
+                cursor={{ fill: 'var(--muted)' }}
+                content={<ChartTooltipContent formatter={(v) => `${comma(Number(v))} merged`} />}
+              />
+              <Bar dataKey="merged" fill="var(--color-weekday)" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </CardContent>
+      </Card>
+      <Card className="rounded-[6px]">
+        <CardHeader className="pb-2">
+          <SectionTitle>Merges by hour</SectionTitle>
+        </CardHeader>
+        <CardContent>
+          <ChartContainer config={hourChartConfig} className="aspect-auto h-36">
+            <BarChart data={hour} margin={{ left: 0, right: 4, top: 4 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="hour"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={6}
+                interval={3}
+              />
+              <YAxis hide />
+              <ChartTooltip
+                cursor={{ fill: 'var(--muted)' }}
+                content={<ChartTooltipContent formatter={(v) => `${comma(Number(v))} merged`} />}
+              />
+              <Bar dataKey="merged" fill="var(--color-hour)" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </CardContent>
+      </Card>
+      <div className="text-[11px] text-muted-foreground lg:col-span-2">
+        Times in {data.shipDist.zone} (server local time)
+      </div>
+    </div>
+  )
 }
 
 function OverviewContent({ data }: { data: OverviewData }) {
   const top = data.topContributors.slice(0, 10)
   const maxMerged = Math.max(1, ...top.map((c) => c.merged))
   const largest = data.largest.slice(0, 5)
-  const recent = data.recent.slice(0, 10)
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Pull requests" value={comma(data.stats.total)} />
-        <Stat
-          label="Merged"
-          value={comma(data.stats.merged)}
-          valueClassName="text-purple-600 dark:text-purple-400"
-        />
-        <Stat
-          label="Open"
-          value={comma(data.stats.open)}
-          valueClassName="text-green-600 dark:text-green-400"
-        />
-        <Stat label="Contributors" value={comma(data.contributors)} />
-        <Stat
-          label="Lines added"
-          value={compact(data.stats.additions)}
-          valueClassName="text-green-600 dark:text-green-400"
-        />
-        <Stat
-          label="Lines deleted"
-          value={compact(data.stats.deletions)}
-          valueClassName="text-red-600 dark:text-red-400"
-        />
-        <Stat label="Avg PR size" value={comma(Math.round(data.stats.avgDiff))} />
-        <Stat label="Files changed" value={comma(data.stats.files)} />
+      <StatStrip data={data} />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {data.velocity.map((v) => (
+          <VelocityCard key={v.label} v={v} />
+        ))}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -115,12 +252,7 @@ function OverviewContent({ data }: { data: OverviewData }) {
             <ChartContainer config={mergedChartConfig} className="h-[300px]">
               <AreaChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
                 <CartesianGrid vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
@@ -131,9 +263,7 @@ function OverviewContent({ data }: { data: OverviewData }) {
                 <ChartTooltip
                   cursor={{ stroke: 'var(--border)' }}
                   content={
-                    <ChartTooltipContent
-                      formatter={(value) => `${comma(Number(value))} PRs`}
-                    />
+                    <ChartTooltipContent formatter={(value) => `${comma(Number(value))} PRs`} />
                   }
                 />
                 <Area
@@ -157,12 +287,7 @@ function OverviewContent({ data }: { data: OverviewData }) {
             <ChartContainer config={linesChartConfig} className="h-[300px]">
               <BarChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
                 <CartesianGrid vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
@@ -170,26 +295,17 @@ function OverviewContent({ data }: { data: OverviewData }) {
                   width={40}
                   tickFormatter={(v) => compact(Number(v))}
                 />
-                <ChartTooltip
-                  cursor={{ fill: 'var(--muted)' }}
-                  content={<ChartTooltipContent />}
-                />
-                <Bar
-                  dataKey="additions"
-                  stackId="lines"
-                  fill="var(--color-additions)"
-                />
-                <Bar
-                  dataKey="deletions"
-                  stackId="lines"
-                  fill="var(--color-deletions)"
-                />
+                <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<ChartTooltipContent />} />
+                <Bar dataKey="additions" stackId="lines" fill="var(--color-additions)" />
+                <Bar dataKey="deletions" stackId="lines" fill="var(--color-deletions)" />
                 <ChartLegend content={<ChartLegendContent />} />
               </BarChart>
             </ChartContainer>
           </CardContent>
         </Card>
       </div>
+
+      <WhenWeShip data={data} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
@@ -220,8 +336,18 @@ function OverviewContent({ data }: { data: OverviewData }) {
                       style={{ width: `${(c.merged / maxMerged) * 100}%` }}
                     />
                   </div>
-                  <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  <span className="flex w-24 shrink-0 items-center justify-end gap-1.5 text-xs tabular-nums text-muted-foreground">
                     {comma(c.merged)} merged
+                    {c.currentStreak >= 2 && (
+                      <span
+                        className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400"
+                        title={`${c.currentStreak} week shipping streak`}
+                      >
+                        <Flame className="size-3" />
+                        {c.currentStreak}w
+                      </span>
+                    )}
+                    {c.isBot && <Badge variant="secondary">bot</Badge>}
                   </span>
                 </div>
               ))}
@@ -284,126 +410,38 @@ function OverviewContent({ data }: { data: OverviewData }) {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <SectionTitle>Repositories</SectionTitle>
-        </CardHeader>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Repository</TableHead>
-              <TableHead className="text-right">PRs</TableHead>
-              <TableHead className="text-right">Merged</TableHead>
-              <TableHead className="text-right">Open</TableHead>
-              <TableHead className="text-right">Additions</TableHead>
-              <TableHead className="text-right">Deletions</TableHead>
-              <TableHead className="text-right">Avg diff</TableHead>
-              <TableHead className="text-right">Contributors</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.repos.map((repo) => (
-              <TableRow key={repo.name}>
-                <TableCell className="max-w-[420px]">
-                  <span className="flex items-center gap-2">
-                    <a
-                      href={`https://github.com/${data.org}/${repo.name}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="truncate font-semibold text-foreground hover:text-blue-600 dark:hover:text-blue-400"
-                    >
-                      {repo.name}
-                    </a>
-                    {repo.private ? (
-                      <Lock className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : null}
-                    {repo.archived ? (
-                      <Badge
-                        variant="secondary"
-                        className="text-muted-foreground"
-                      >
-                        archived
-                      </Badge>
-                    ) : null}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {comma(repo.total)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {comma(repo.merged)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {comma(repo.open)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
-                  +{comma(repo.additions)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-red-600 tabular-nums dark:text-red-400">
-                  −{comma(repo.deletions)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {comma(Math.round(repo.avgDiff))}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {comma(repo.contributors)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <SectionTitle>Recently merged</SectionTitle>
-        </CardHeader>
-        {recent.length > 0 ? (
-          <div className="flex flex-col">
-            {recent.map((pull) => (
-              <PrRow key={`${pull.repo}#${pull.number}`} pull={pull} />
-            ))}
-          </div>
-        ) : (
-          <CardContent>
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              No pull requests merged yet.
-            </div>
-          </CardContent>
-        )}
-      </Card>
+      <BotBusCard data={data} />
     </div>
   )
 }
 
 export default function OverviewPage() {
-  const { data, loading, error, refetch } = useApi(getOverview)
+  const { data, loading, error, refetch } = useApi(getOverview, [])
 
+  if (loading) return <Loading />
+  if (error) {
+    return (
+      <PageHeader title="Overview" description="Pull request activity across the organisation.">
+        <EmptyState text={`Failed to load: ${error}`}>
+          <button onClick={refetch}>Try again</button>
+        </EmptyState>
+      </PageHeader>
+    )
+  }
+  if (!data || data.stats.total === 0) {
+    return (
+      <PageHeader title="Overview" description="Pull request activity across the organisation.">
+        <EmptyState text="Waiting for data — the first sync is in progress." />
+      </PageHeader>
+    )
+  }
   return (
-    <>
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Overview"
-        description={
-          data
-            ? `Pull request activity across ${data.org}`
-            : 'Pull request activity across your organization'
-        }
+        description={`Pull request activity across ${data.org}.`}
       />
-      {loading ? (
-        <Loading />
-      ) : error ? (
-        <EmptyState text={error}>
-          <Button variant="outline" size="sm" className="mt-4" onClick={refetch}>
-            Try again
-          </Button>
-        </EmptyState>
-      ) : !data ? (
-        <EmptyState text="No data available" />
-      ) : data.stats.total === 0 ? (
-        <EmptyState text="Waiting for data — the first sync is in progress." />
-      ) : (
-        <OverviewContent data={data} />
-      )}
-    </>
+      <OverviewContent data={data} />
+    </div>
   )
 }

@@ -27,6 +27,7 @@ import {
   ChartContainer,
   ChartLegend,
   ChartTooltip,
+  ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
 import {
@@ -296,6 +297,63 @@ export default function InsightsPage() {
     [data],
   )
 
+  // merged chart data: merged + moving average + year-ago + forecast extension
+  const mergedData = useMemo(() => {
+    if (!data) return []
+    const window = gran === 'week' ? 5 : 3
+    const rows: { label: string; merged: number | null; ma: number | null; prev: number | null; forecast: number | null }[] = data.ship.map((b, i) => {
+      const lo = Math.max(0, i - window + 1)
+      const slice = data.ship.slice(lo, i + 1)
+      const ma = slice.reduce((s, x) => s + x.merged, 0) / slice.length
+      return { label: b.label, merged: b.merged, ma: ma, prev: null, forecast: null }
+    })
+    if ((data.shipPrev ?? []).length === data.ship.length) {
+      ;(data.shipPrev ?? []).forEach((b, i) => {
+        rows[i].prev = b.merged
+      })
+    }
+    // least-squares forecast over merged
+    const ys = rows.map((r) => r.merged ?? 0)
+    const n = ys.length
+    if (n >= 4) {
+      const meanX = (n - 1) / 2
+      const meanY = ys.reduce((s, v) => s + v, 0) / n
+      let num = 0
+      let den = 0
+      ys.forEach((y, x) => {
+        num += (x - meanX) * (y - meanY)
+        den += (x - meanX) * (x - meanX)
+      })
+      const slope = den > 0 ? num / den : 0
+      const intercept = meanY - slope * meanX
+      for (let k = 1; k <= 3; k++) {
+        const x = n - 1 + k
+        rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: Math.max(0, slope * x + intercept) })
+      }
+    }
+    return rows
+  }, [data, gran])
+
+  const cumulativeData = useMemo(
+    () => {
+      if (!data) return []
+      let total = 0
+      return data.ship.map((b) => {
+        total += b.additions + b.deletions
+        return { label: b.label, total }
+      })
+    },
+    [data],
+  )
+
+  const ciMinutesData = useMemo(
+    () => data?.ci.map((b) => ({ label: b.label, minutes: b.totalMinutes })) ?? [],
+    [data],
+  )
+
+  const [showAllWorkflows, setShowAllWorkflows] = useState(false)
+  const visibleWorkflows = data?.workflows.slice(0, showAllWorkflows ? undefined : 8) ?? []
+
   const toggleSeries = (key: string) => setHidden((h) => ({ ...h, [key]: !h[key] }))
 
   const org = status?.org
@@ -364,7 +422,7 @@ export default function InsightsPage() {
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <ChartCard title="Pull requests merged">
                   <ChartContainer config={shipConfig} className="aspect-auto h-64">
-                    <AreaChart data={data.ship} margin={{ left: 0, right: 8, top: 4 }}>
+                    <AreaChart data={mergedData} margin={{ left: 0, right: 8, top: 4 }}>
                       <defs>
                         <linearGradient id="fillMerged" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="var(--color-merged)" stopOpacity={0.4} />
@@ -381,6 +439,18 @@ export default function InsightsPage() {
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
                       <ChartTooltip content={<MergedTip />} />
+                      {mergedData.some((r) => r.prev !== null) && (
+                        <Line
+                          type="monotone"
+                          dataKey="prev"
+                          name="Last year"
+                          stroke="var(--chart-5)"
+                          strokeWidth={1.5}
+                          strokeDasharray="4 4"
+                          dot={false}
+                          activeDot={false}
+                        />
+                      )}
                       <Area
                         type="monotone"
                         dataKey="merged"
@@ -389,8 +459,33 @@ export default function InsightsPage() {
                         fill="url(#fillMerged)"
                         activeDot={{ r: 4 }}
                       />
+                      <Line
+                        type="monotone"
+                        dataKey="ma"
+                        name="Moving average"
+                        stroke="var(--chart-5)"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 4"
+                        dot={false}
+                        activeDot={false}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="forecast"
+                        name="Forecast"
+                        stroke="var(--chart-1)"
+                        strokeWidth={1.5}
+                        strokeDasharray="6 3"
+                        dot={false}
+                        activeDot={false}
+                      />
                     </AreaChart>
                   </ChartContainer>
+                  {period !== '12m' && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      Switch to Last 12 months to compare year-over-year.
+                    </p>
+                  )}
                 </ChartCard>
 
                 <ChartCard title="Lines merged">
@@ -455,6 +550,45 @@ export default function InsightsPage() {
                   </ChartContainer>
                 </ChartCard>
               </div>
+
+              <div className="mt-4 grid gap-4">
+                <ChartCard title="Cumulative lines shipped">
+                  <ChartContainer config={shipConfig} className="aspect-auto h-56">
+                    <AreaChart data={cumulativeData} margin={{ left: 0, right: 8, top: 4 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        minTickGap={24}
+                      />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v: number) => compact(Number(v))}
+                      />
+                      <ChartTooltip
+                        content={
+                          <ChartTooltipContent
+                            formatter={(value) => `${comma(Number(value))} lines`}
+                          />
+                        }
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="total"
+                        name="Total lines"
+                        stroke="var(--chart-2)"
+                        strokeWidth={2}
+                        fill="var(--chart-2)"
+                        fillOpacity={0.15}
+                        activeDot={{ r: 4 }}
+                      />
+                    </AreaChart>
+                  </ChartContainer>
+                </ChartCard>
+              </div>
             </>
           )}
 
@@ -471,14 +605,18 @@ export default function InsightsPage() {
                 <Card className="rounded-[6px]">
                   <CardContent className="p-4">
                     <div className="text-2xl font-semibold tabular-nums text-chart-2">
-                      {data.ciStats.successRate.toFixed(1)}%
+                      {data.ciStats.successRate != null && Number.isFinite(data.ciStats.successRate)
+                        ? `${data.ciStats.successRate.toFixed(1)}%`
+                        : '—'}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">Success rate</div>
                   </CardContent>
                 </Card>
                 <StatCard
                   label="Median duration"
-                  value={fmtDuration(data.ciStats.medianDuration)}
+                  value={
+                    data.ciStats.medianDuration > 0 ? fmtDuration(data.ciStats.medianDuration) : '—'
+                  }
                 />
                 <StatCard label="Workflows" value={comma(data.ciStats.workflows)} />
               </div>
@@ -555,7 +693,41 @@ export default function InsightsPage() {
                 </ChartCard>
               </div>
 
-              <div className="mt-4 grid gap-4">
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <ChartCard title="CI minutes per bucket">
+                  <ChartContainer config={ciConfig} className="aspect-auto h-64">
+                    <BarChart data={ciMinutesData} margin={{ left: 0, right: 8, top: 4 }}>
+                      <CartesianGrid vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        minTickGap={24}
+                      />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v: number) => compact(Number(v))}
+                      />
+                      <ChartTooltip
+                        cursor={{ fill: 'var(--muted)' }}
+                        content={
+                          <ChartTooltipContent
+                            formatter={(value) => `${comma(Number(value))} min`}
+                          />
+                        }
+                      />
+                      <Bar
+                        dataKey="minutes"
+                        name="Minutes"
+                        fill="var(--chart-1)"
+                        radius={[3, 3, 0, 0]}
+                      />
+                    </BarChart>
+                  </ChartContainer>
+                </ChartCard>
+
                 <ChartCard title="Median duration">
                   <ChartContainer config={ciConfig} className="aspect-auto h-64">
                     <LineChart data={data.ci} margin={{ left: 0, right: 8, top: 4 }}>
@@ -594,21 +766,23 @@ export default function InsightsPage() {
                       <TableHead>Repository</TableHead>
                       <TableHead className="text-right">Runs</TableHead>
                       <TableHead className="text-right">Success rate</TableHead>
-                      <TableHead className="text-right">Median duration</TableHead>
+                      <TableHead>Trend (6 mo)</TableHead>
+                      <TableHead className="text-right">Median</TableHead>
+                      <TableHead className="text-right">Longest</TableHead>
                       <TableHead className="text-right">Last run</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.workflows.map((wf) => {
+                    {visibleWorkflows.map((wf) => {
                       const repoHref = org
                         ? `https://github.com/${org}/${wf.repo}/actions`
                         : null
                       return (
                         <TableRow key={`${wf.repo}/${wf.workflow}`}>
-                          <TableCell>
+                          <TableCell className="max-w-[240px]">
                             <div className="flex items-center gap-2">
                               <ConclusionIcon conclusion={wf.lastConclusion} />
-                              <span className="font-semibold">{wf.workflow}</span>
+                              <span className="truncate font-semibold">{wf.workflow}</span>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -636,8 +810,35 @@ export default function InsightsPage() {
                           >
                             {wf.successRate.toFixed(1)}%
                           </TableCell>
+                          <TableCell>
+                            <div
+                              className="flex items-center gap-1"
+                              title={`Monthly success rate: ${wf.trend
+                                .map((v) => (v < 0 ? '–' : `${v.toFixed(0)}%`))
+                                .join(' · ')}`}
+                            >
+                              {wf.trend.map((v, i) => (
+                                <span
+                                  key={i}
+                                  className={cn(
+                                    'size-2 rounded-full',
+                                    v < 0
+                                      ? 'bg-muted'
+                                      : v >= 90
+                                        ? 'bg-chart-2'
+                                        : v >= 50
+                                          ? 'bg-amber-500'
+                                          : 'bg-chart-3',
+                                  )}
+                                />
+                              ))}
+                            </div>
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {fmtDuration(wf.medianDurationMin)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {fmtDuration(wf.longestDurationMin)}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground">
                             {formatDate(wf.lastRunAt) || 'Never'}
@@ -647,6 +848,19 @@ export default function InsightsPage() {
                     })}
                   </TableBody>
                 </Table>
+                {data.workflows.length > 8 && (
+                  <div className="border-t border-border px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllWorkflows((s) => !s)}
+                      className="text-sm font-medium text-primary hover:underline"
+                    >
+                      {showAllWorkflows
+                        ? `Show fewer`
+                        : `Show all (${data.workflows.length})`}
+                    </button>
+                  </div>
+                )}
               </ChartCard>
             </>
           )}
