@@ -1,0 +1,123 @@
+{{define "insights"}}
+{{template "docHead" .}}
+<div class="pagehead">
+  <h1 class="pagehead-title">Insights</h1>
+  <p class="pagehead-desc">Shipping velocity and CI health across {{.Org}}, bucketed {{if eq .Gran "week"}}weekly{{else}}monthly{{end}}.</p>
+</div>
+
+<form class="filterbar" method="get" action="/insights">
+  <label class="filter-label" for="insights-repo">Repository</label>
+  <select class="select" id="insights-repo" name="repo" onchange="this.form.submit()">
+    <option value="">All repositories</option>
+    {{range .RepoOptions}}
+    <option value="{{.Name}}"{{if eq $.Repo .Name}} selected{{end}}>{{.Name}}</option>
+    {{end}}
+  </select>
+  <label class="filter-label" for="insights-period">Period</label>
+  <select class="select" id="insights-period" name="period" onchange="this.form.submit()">
+    <option value="3m"{{if eq .Period "3m"}} selected{{end}}>Last 3 months</option>
+    <option value="6m"{{if eq .Period "6m"}} selected{{end}}>Last 6 months</option>
+    <option value="12m"{{if eq .Period "12m"}} selected{{end}}>Last 12 months</option>
+    <option value="all"{{if eq .Period "all"}} selected{{end}}>All time</option>
+  </select>
+  <label class="filter-label" for="insights-gran">Granularity</label>
+  <select class="select" id="insights-gran" name="gran" onchange="this.form.submit()">
+    <option value="month"{{if eq .Gran "month"}} selected{{end}}>Monthly</option>
+    <option value="week"{{if eq .Gran "week"}} selected{{end}}>Weekly</option>
+  </select>
+</form>
+
+<h2 class="section-title">Shipping</h2>
+<div class="chart-grid">
+  <div class="Box">
+    <div class="Box-header"><h3 class="Box-title">Pull requests merged</h3></div>
+    {{if .HasShip}}<div class="Box-body">{{.MergedChart}}</div>{{else}}<div class="empty-state"><p>No merged pull requests in this period.</p></div>{{end}}
+  </div>
+  <div class="Box">
+    <div class="Box-header"><h3 class="Box-title">Lines merged</h3></div>
+    {{if .HasShip}}<div class="Box-body">{{.LinesChart}}</div>{{else}}<div class="empty-state"><p>No merged pull requests in this period.</p></div>{{end}}
+  </div>
+</div>
+<div class="Box">
+  <div class="Box-header"><h3 class="Box-title">Cycle time — median days from opened to merged</h3></div>
+  {{if .HasShip}}<div class="Box-body">{{.CycleChart}}</div>{{else}}<div class="empty-state"><p>No merged pull requests in this period.</p></div>{{end}}
+</div>
+
+<h2 class="section-title">CI</h2>
+{{if not .HasCI}}
+<div class="Box">
+  <div class="empty-state"><p>No workflow runs found for this filter.</p></div>
+</div>
+{{else}}
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{comma .CI.TotalRuns}}</div>
+    <div class="stat-label">Workflow runs</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value stat-open">{{printf "%.1f" .CI.SuccessRate}}%</div>
+    <div class="stat-label">Success rate</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value stat-neutral">{{printf "%.1f" .CI.MedianDuration}} min</div>
+    <div class="stat-label">Median duration</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{comma .CI.Workflows}}</div>
+    <div class="stat-label">Workflows</div>
+  </div>
+</div>
+<div class="chart-grid">
+  <div class="Box">
+    <div class="Box-header">
+      <h3 class="Box-title">Workflow runs</h3>
+      <div class="legend">
+        <span class="legend-item"><span class="legend-swatch legend-swatch-add"></span>Success</span>
+        <span class="legend-item"><span class="legend-swatch legend-swatch-del"></span>Failure</span>
+        <span class="legend-item"><span class="legend-swatch legend-swatch-other"></span>Cancelled / other</span>
+      </div>
+    </div>
+    <div class="Box-body">{{.RunsChart}}</div>
+  </div>
+  <div class="Box">
+    <div class="Box-header"><h3 class="Box-title">Success rate</h3></div>
+    <div class="Box-body">{{.SuccessRateChart}}</div>
+  </div>
+</div>
+<div class="Box">
+  <div class="Box-header"><h3 class="Box-title">Median duration</h3></div>
+  <div class="Box-body">{{.DurationChart}}</div>
+</div>
+<div class="Box">
+  <div class="Box-header"><h3 class="Box-title">Workflows</h3></div>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Workflow</th>
+        <th>Repository</th>
+        <th class="num">Runs</th>
+        <th class="num">Success rate</th>
+        <th class="num">Median duration</th>
+        <th>Last run</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Workflows}}
+      <tr>
+        <td>
+          <span class="workflow-conclusion{{if eq .LastConclusion "success"}} conclusion-success{{else if eq .LastConclusion "failure"}} conclusion-failure{{else}} conclusion-other{{end}}" aria-hidden="true">{{if eq .LastConclusion "success"}}{{icon "check"}}{{else if eq .LastConclusion "failure"}}{{icon "closed"}}{{else}}{{icon "draft"}}{{end}}</span>
+          <span class="workflow-name">{{.Workflow}}</span>
+        </td>
+        <td><a class="link" href="https://github.com/{{$.Org}}/{{.Repo}}/actions" target="_blank" rel="noreferrer">{{.Repo}}</a></td>
+        <td class="num">{{comma .Runs}}</td>
+        <td class="num{{if lt .SuccessRate 90.0}} diff-del{{else}} diff-add{{end}}">{{printf "%.1f" .SuccessRate}}%</td>
+        <td class="num">{{printf "%.1f" .MedianDurationMin}} min</td>
+        <td class="muted nowrap">{{date .LastRunAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{template "docTail" .}}
+{{end}}

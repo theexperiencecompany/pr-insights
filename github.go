@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	apiBase    = "https://api.github.com"
-	graphQLURL = "https://api.github.com/graphql"
-	userAgent  = "pr-insights/1.0"
-	workers    = 5
+	apiBase         = "https://api.github.com"
+	graphQLURL      = "https://api.github.com/graphql"
+	userAgent       = "pr-insights/1.0"
+	workers         = 5
+	runsPageWorkers = 8
 )
 
 const pullsQuery = `
@@ -156,15 +157,26 @@ func (s *Syncer) syncOnce() {
 		return
 	}
 
-	// Previous pulls per repo are kept when a repo fails this sync, so a
+	// Previous data per repo is kept when a repo fails this sync, so a
 	// transient error never degrades the dashboard (a banner flags it).
 	prev := s.store.Snapshot()
-	prevByRepo := make(map[string][]Pull, len(prev.Pulls))
+	prevPullsByRepo := make(map[string][]Pull, len(prev.Pulls))
 	for _, p := range prev.Pulls {
-		prevByRepo[p.Repo] = append(prevByRepo[p.Repo], p)
+		prevPullsByRepo[p.Repo] = append(prevPullsByRepo[p.Repo], p)
+	}
+	prevRunsByRepo := make(map[string][]Run, len(prev.Runs))
+	lastRunByRepo := make(map[string]*time.Time)
+	for i := range prev.Runs {
+		r := &prev.Runs[i]
+		prevRunsByRepo[r.Repo] = append(prevRunsByRepo[r.Repo], *r)
+		if lastRunByRepo[r.Repo] == nil || r.CreatedAt.After(*lastRunByRepo[r.Repo]) {
+			t := r.CreatedAt
+			lastRunByRepo[r.Repo] = &t
+		}
 	}
 
 	pullsByRepo := make([][]Pull, len(repos))
+	runsByRepo := make([][]Run, len(repos))
 	repoErrs := make([]RepoError, 0)
 	var rlMu sync.Mutex
 
@@ -176,16 +188,42 @@ func (s *Syncer) syncOnce() {
 			defer wg.Done()
 			for i := range jobCh {
 				repo := repos[i]
+
 				pulls, perr := s.fetchRepoPulls(ctx, repo.Name)
 				if perr != nil {
-					pulls = prevByRepo[repo.Name]
+					pulls = prevPullsByRepo[repo.Name]
 					rlMu.Lock()
-					repoErrs = append(repoErrs, RepoError{Repo: repo.Name, Error: perr.Error()})
+					repoErrs = append(repoErrs, RepoError{Repo: repo.Name, Phase: "pulls", Error: perr.Error()})
 					rlMu.Unlock()
-					slog.Warn("sync: repo failed, keeping previous data", "repo", repo.Name, "err", perr, "kept", len(pulls))
-					continue
+					slog.Warn("sync: pulls fetch failed, keeping previous data", "repo", repo.Name, "err", perr, "kept", len(pulls))
 				}
 				pullsByRepo[i] = pulls
+
+				runs, rerr := s.fetchRepoRuns(ctx, repo.Name, lastRunByRepo[repo.Name])
+				if rerr != nil {
+					runs = prevRunsByRepo[repo.Name]
+					rlMu.Lock()
+					repoErrs = append(repoErrs, RepoError{Repo: repo.Name, Phase: "ci", Error: rerr.Error()})
+					rlMu.Unlock()
+					slog.Warn("sync: runs fetch failed, keeping previous data", "repo", repo.Name, "err", rerr, "kept", len(runs))
+				} else if lastRunByRepo[repo.Name] != nil {
+					// Incremental fetch returned only new runs; merge them
+					// with the previous history (deduped by run ID).
+					seen := make(map[int64]bool, len(prevRunsByRepo[repo.Name])+len(runs))
+					merged := make([]Run, 0, len(prevRunsByRepo[repo.Name])+len(runs))
+					for _, r := range prevRunsByRepo[repo.Name] {
+						seen[r.ID] = true
+						merged = append(merged, r)
+					}
+					for _, r := range runs {
+						if !seen[r.ID] {
+							seen[r.ID] = true
+							merged = append(merged, r)
+						}
+					}
+					runs = merged
+				}
+				runsByRepo[i] = runs
 			}
 		}()
 	}
@@ -211,10 +249,18 @@ dispatch:
 	for _, batch := range pullsByRepo {
 		pulls = append(pulls, batch...)
 	}
+	runs := make([]Run, 0)
+	for _, batch := range runsByRepo {
+		runs = append(runs, batch...)
+	}
 	slog.Info("sync complete",
-		"repos", len(repos), "pulls", len(pulls), "repo_errors", len(repoErrs),
+		"repos", len(repos), "pulls", len(pulls), "runs", len(runs), "repo_errors", len(repoErrs),
 		"rate_limit_remaining", rl.remaining)
-	s.store.Replace(s.org, avatarURL, repos, pulls, repoErrs, rl.info(), time.Now().UTC(), "")
+	s.store.Replace(syncResult{
+		org: s.org, avatarURL: avatarURL,
+		repos: repos, pulls: pulls, runs: runs,
+		repoErrs: repoErrs, rl: rl.info(), syncedAt: time.Now().UTC(),
+	})
 	if err := s.store.Save(); err != nil {
 		slog.Error("failed to persist snapshot", "err", err)
 	}
@@ -326,6 +372,116 @@ func authorLogin(a *struct{ Login string }) string {
 		return "ghost"
 	}
 	return a.Login
+}
+
+type apiRun struct {
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	HeadBranch   string    `json:"head_branch"`
+	Event        string    `json:"event"`
+	Conclusion   string    `json:"conclusion"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	RunStartedAt time.Time `json:"run_started_at"`
+}
+
+type apiRunsResponse struct {
+	TotalCount   int      `json:"total_count"`
+	WorkflowRuns []apiRun `json:"workflow_runs"`
+}
+
+// fetchRepoRuns walks the workflow-runs pagination for one repository,
+// fetching pages in parallel (REST pages are independent). When since is
+// non-nil only runs created after it are fetched (incremental sync);
+// otherwise the full history is fetched.
+func (s *Syncer) fetchRepoRuns(ctx context.Context, repo string, since *time.Time) ([]Run, error) {
+	first, err := s.fetchRunsPage(ctx, repo, 1, since)
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]Run, 0, first.totalCount)
+	for _, ar := range first.runs {
+		runs = append(runs, ar)
+	}
+	pages := (first.totalCount + 99) / 100
+	if pages <= 1 {
+		return runs, nil
+	}
+
+	remaining := pages - 1
+	results := make([][]Run, remaining)
+	errs := make([]error, remaining)
+	var wg sync.WaitGroup
+	pageCh := make(chan int, remaining)
+	for range runsPageWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range pageCh {
+				pr, perr := s.fetchRunsPage(ctx, repo, p, since)
+				results[p-2] = pr.runs
+				errs[p-2] = perr
+			}
+		}()
+	}
+	for p := 2; p <= pages; p++ {
+		pageCh <- p
+	}
+	close(pageCh)
+	wg.Wait()
+
+	for p, perr := range errs {
+		if perr != nil {
+			return nil, fmt.Errorf("workflow runs page %d: %w", p+2, perr)
+		}
+	}
+	for _, pr := range results {
+		runs = append(runs, pr...)
+	}
+	return runs, nil
+}
+
+type runsPage struct {
+	runs       []Run
+	totalCount int
+}
+
+func (s *Syncer) fetchRunsPage(ctx context.Context, repo string, page int, since *time.Time) (runsPage, error) {
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs?per_page=100&page=%d", s.org, repo, page)
+	if since != nil {
+		path += "&created=>=" + since.UTC().Format("2006-01-02T15:04:05Z")
+	}
+	var resp apiRunsResponse
+	if err := s.doREST(ctx, "GET", path, nil, &resp, nil); err != nil {
+		return runsPage{}, err
+	}
+	// Local guard against clock skew: the server-side filter should exclude
+	// older runs, but drop any stragglers so the merge stays clean.
+	runs := make([]Run, 0, len(resp.WorkflowRuns))
+	for _, ar := range resp.WorkflowRuns {
+		if since != nil && ar.CreatedAt.Before(*since) {
+			continue
+		}
+		duration := 0
+		if ar.Status == "completed" && !ar.RunStartedAt.IsZero() && ar.UpdatedAt.After(ar.RunStartedAt) {
+			duration = int(ar.UpdatedAt.Sub(ar.RunStartedAt).Seconds())
+		}
+		runs = append(runs, Run{
+			ID:           ar.ID,
+			Repo:         repo,
+			Workflow:     ar.Name,
+			Branch:       ar.HeadBranch,
+			Event:        ar.Event,
+			Conclusion:   ar.Conclusion,
+			Status:       ar.Status,
+			CreatedAt:    ar.CreatedAt,
+			UpdatedAt:    ar.UpdatedAt,
+			RunStartedAt: ar.RunStartedAt,
+			DurationSec:  duration,
+		})
+	}
+	return runsPage{runs: runs, totalCount: resp.TotalCount}, nil
 }
 
 func (s *Syncer) doGraphQL(ctx context.Context, owner, repo string, cursor *string) (*graphQLResponse, error) {

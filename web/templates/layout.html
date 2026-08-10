@@ -21,6 +21,7 @@
       <a class="header-nav-item{{if eq .Page "leaderboards"}} current{{end}}" href="/leaderboards">Leaderboards</a>
       <a class="header-nav-item{{if eq .Page "contributors"}} current{{end}}" href="/contributors">Contributors <span class="counter">{{comma .ContributorCount}}</span></a>
       <a class="header-nav-item{{if eq .Page "repos"}} current{{end}}" href="/repos">Repositories <span class="counter">{{comma .RepoCount}}</span></a>
+      <a class="header-nav-item{{if eq .Page "insights"}} current{{end}}" href="/insights">Insights</a>
       <a class="header-nav-item{{if eq .Page "pulls"}} current{{end}}" href="/pulls">Pull requests <span class="counter">{{comma .OpenCount}}</span></a>
     </nav>
     <div class="header-right">

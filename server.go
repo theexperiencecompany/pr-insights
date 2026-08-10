@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /leaderboards", s.handleLeaderboards)
 	mux.HandleFunc("GET /contributors", s.handleContributors)
 	mux.HandleFunc("GET /repos", s.handleRepos)
+	mux.HandleFunc("GET /insights", s.handleInsights)
 	mux.HandleFunc("GET /pulls", s.handlePulls)
 	mux.HandleFunc("POST /api/sync", s.handleSync)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
@@ -343,6 +344,125 @@ func (s *Server) handlePulls(w http.ResponseWriter, r *http.Request) {
 	}{baseData: b, Rows: rows, Pager: pg, Repo: repo, State: state, Query: q, RepoOptions: repoOptions})
 }
 
+// handleInsights renders shipping velocity and CI charts with configurable
+// repo / period / granularity filters.
+func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Snapshot()
+	b := s.base("insights", snap)
+
+	repo := r.URL.Query().Get("repo")
+	period := r.URL.Query().Get("period")
+	switch period {
+	case "3m", "6m", "12m", "all":
+	default:
+		period = "6m"
+	}
+	gran := Granularity(r.URL.Query().Get("gran"))
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+
+	var since time.Time
+	switch period {
+	case "3m":
+		since = time.Now().UTC().AddDate(0, -3, 0)
+	case "6m":
+		since = time.Now().UTC().AddDate(0, -6, 0)
+	case "12m":
+		since = time.Now().UTC().AddDate(0, -12, 0)
+	}
+
+	ship := ShippingSeries(snap.Pulls, repo, gran, since)
+	ci := CISeries(snap.Runs, repo, gran, since)
+	workflows := WorkflowStats(snap.Runs, repo, since)
+
+	mergedLabels := make([]string, len(ship))
+	mergedVals := make([]float64, len(ship))
+	linesVals := make([]float64, len(ship))
+	cycleVals := make([]float64, len(ship))
+	for i, bkt := range ship {
+		mergedLabels[i] = bkt.Label
+		mergedVals[i] = float64(bkt.Merged)
+		linesVals[i] = float64(bkt.Additions + bkt.Deletions)
+		cycleVals[i] = bkt.CycleMedianDays
+	}
+
+	ciLabels := make([]string, len(ci))
+	rateVals := make([]float64, len(ci))
+	durVals := make([]float64, len(ci))
+	for i, bkt := range ci {
+		ciLabels[i] = bkt.Label
+		rateVals[i] = bkt.SuccessRate
+		durVals[i] = bkt.MedianDurationMin
+	}
+
+	var ciTotal, ciSuccess, ciWorkflows int
+	var ciDur []float64
+	for _, wf := range workflows {
+		ciTotal += wf.Runs
+		ciSuccess += wf.Success
+		ciWorkflows++
+		ciDur = append(ciDur, wf.MedianDurationMin)
+	}
+	ciRate := 0.0
+	if ciTotal > 0 {
+		ciRate = float64(ciSuccess) / float64(ciTotal) * 100
+	}
+
+	repoOptions := make([]RepoInfo, 0)
+	for _, rs := range RepoStats(snap.Pulls, snap.Repos) {
+		if rs.Total > 0 {
+			repoOptions = append(repoOptions, rs.RepoInfo)
+		}
+	}
+
+	s.render(w, r, "insights", struct {
+		baseData
+		Repo             string
+		Period           string
+		Gran             string
+		RepoOptions      []RepoInfo
+		MergedChart      template.HTML
+		LinesChart       template.HTML
+		CycleChart       template.HTML
+		HasShip          bool
+		RunsChart        template.HTML
+		SuccessRateChart template.HTML
+		DurationChart    template.HTML
+		HasCI            bool
+		CI               struct {
+			TotalRuns      int
+			SuccessRate    float64
+			MedianDuration float64
+			Workflows      int
+		}
+		Workflows []WorkflowStat
+	}{
+		baseData:         b,
+		Repo:             repo,
+		Period:           period,
+		Gran:             string(gran),
+		RepoOptions:      repoOptions,
+		MergedChart:      lineChartSVG(mergedLabels, mergedVals, "", "accent", "Pull requests merged over time", 0),
+		LinesChart:       lineChartSVG(mergedLabels, linesVals, "", "add", "Lines merged over time", 0),
+		CycleChart:       lineChartSVG(mergedLabels, cycleVals, "d", "other", "Median cycle time over time", 0),
+		HasShip:          len(ship) > 0,
+		RunsChart:        ciRunsBarsSVG(ci),
+		SuccessRateChart: lineChartSVG(ciLabels, rateVals, "%", "add", "CI success rate over time", 100),
+		DurationChart:    lineChartSVG(ciLabels, durVals, "min", "accent", "Median CI duration over time", 0),
+		HasCI:            len(ci) > 0,
+		CI: struct {
+			TotalRuns      int
+			SuccessRate    float64
+			MedianDuration float64
+			Workflows      int
+		}{
+			TotalRuns: ciTotal, SuccessRate: ciRate, MedianDuration: medianFloat(ciDur), Workflows: ciWorkflows,
+		},
+		Workflows: workflows,
+	})
+}
+
 // ---- API ----
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
@@ -356,9 +476,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	snap := s.store.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, `{"org":%q,"syncing":%t,"syncedAt":%q,"lastError":%q,"repoErrors":%d,"pulls":%d,"repos":%d,"rateLimit":%s}`,
+	fmt.Fprintf(w, `{"org":%q,"syncing":%t,"syncedAt":%q,"lastError":%q,"repoErrors":%d,"pulls":%d,"runs":%d,"repos":%d,"rateLimit":%s}`,
 		snap.Org, snap.Syncing, isoOrEmpty(snap.SyncedAt), snap.LastError, len(snap.RepoErrs),
-		len(snap.Pulls), len(snap.Repos), rateLimitJSON(snap.RateLimit))
+		len(snap.Pulls), len(snap.Runs), len(snap.Repos), rateLimitJSON(snap.RateLimit))
 }
 
 func isoOrEmpty(t *time.Time) string {

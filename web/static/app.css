@@ -54,6 +54,7 @@
   --chart-accent: #0969da;
   --chart-add: #1a7f37;
   --chart-del: #d1242f;
+  --chart-other: #59636e;
   --chart-grid: #d1d9e0;
   --chart-text: #59636e;
   --merged-bg: #fbefff;
@@ -117,6 +118,7 @@
   --chart-accent: #4493f8;
   --chart-add: #3fb950;
   --chart-del: #f85149;
+  --chart-other: #9198a1;
   --chart-grid: #3d444d;
   --chart-text: #9198a1;
   --merged-bg: #ab7df826;
@@ -718,8 +720,102 @@ main.container {
   fill: var(--chart-del);
 }
 
+.chart-bar-success {
+  fill: var(--chart-add);
+}
+
+.chart-bar-failure {
+  fill: var(--chart-del);
+}
+
+.chart-bar-other {
+  fill: var(--chart-other);
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-line-accent {
+  stroke: var(--chart-accent);
+}
+
+.chart-line-add {
+  stroke: var(--chart-add);
+}
+
+.chart-line-del {
+  stroke: var(--chart-del);
+}
+
+.chart-line-other {
+  stroke: var(--chart-other);
+}
+
+.chart-area-accent {
+  fill: var(--chart-accent);
+  opacity: 0.12;
+}
+
+.chart-area-add {
+  fill: var(--chart-add);
+  opacity: 0.12;
+}
+
+.chart-area-other {
+  fill: var(--chart-other);
+  opacity: 0.12;
+}
+
+.chart-dot {
+  fill: var(--bg-default);
+}
+
+.chart-dot-accent {
+  stroke: var(--chart-accent);
+}
+
+.chart-dot-add {
+  stroke: var(--chart-add);
+}
+
+.chart-dot-other {
+  stroke: var(--chart-other);
+}
+
 .chart-bar:hover {
   opacity: 0.85;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 24px 0 12px;
+  letter-spacing: -0.01em;
+}
+
+.workflow-name {
+  font-weight: 600;
+}
+
+.workflow-conclusion {
+  margin-right: 8px;
+  vertical-align: -3px;
+}
+
+.conclusion-success {
+  color: var(--fg-success);
+}
+
+.conclusion-failure {
+  color: var(--fg-danger);
+}
+
+.conclusion-other {
+  color: var(--fg-muted);
 }
 
 .legend {
@@ -749,6 +845,10 @@ main.container {
 
 .legend-swatch-del {
   background-color: var(--chart-del);
+}
+
+.legend-swatch-other {
+  background-color: var(--chart-other);
 }
 
 /* ---- contributor bars ---- */

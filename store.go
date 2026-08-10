@@ -40,6 +40,21 @@ type Pull struct {
 	URL          string     `json:"url"`
 }
 
+// Run is one GitHub Actions workflow run.
+type Run struct {
+	ID           int64     `json:"id"`
+	Repo         string    `json:"repo"`
+	Workflow     string    `json:"workflow"`
+	Branch       string    `json:"branch"`
+	Event        string    `json:"event"`
+	Conclusion   string    `json:"conclusion"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	RunStartedAt time.Time `json:"runStartedAt"`
+	DurationSec  int       `json:"durationSec"`
+}
+
 // RateLimitInfo is the last known GitHub API rate-limit state.
 type RateLimitInfo struct {
 	Remaining int `json:"remaining"`
@@ -47,8 +62,10 @@ type RateLimitInfo struct {
 }
 
 // RepoError records a per-repo sync failure (other repos still succeeded).
+// Phase is "pulls" or "ci"; the previous data for that repo/phase is kept.
 type RepoError struct {
 	Repo  string `json:"repo"`
+	Phase string `json:"phase"`
 	Error string `json:"error"`
 }
 
@@ -65,6 +82,7 @@ type Data struct {
 	AvatarURL string         `json:"avatarUrl"`
 	Repos     []RepoInfo     `json:"repos"`
 	Pulls     []Pull         `json:"pulls"`
+	Runs      []Run          `json:"runs,omitempty"`
 	RepoErrs  []RepoError    `json:"repoErrors,omitempty"`
 	SyncedAt  *time.Time     `json:"syncedAt,omitempty"`
 	Syncing   bool           `json:"-"`
@@ -144,18 +162,31 @@ func (s *State) Snapshot() Data {
 	return s.data
 }
 
+// syncResult carries everything a completed sync wants to commit.
+type syncResult struct {
+	org       string
+	avatarURL string
+	repos     []RepoInfo
+	pulls     []Pull
+	runs      []Run
+	repoErrs  []RepoError
+	rl        *RateLimitInfo
+	syncedAt  time.Time
+}
+
 // Replace commits a completed sync.
-func (s *State) Replace(org, avatarURL string, repos []RepoInfo, pulls []Pull, repoErrs []RepoError, rl *RateLimitInfo, syncedAt time.Time, lastErr string) {
+func (s *State) Replace(res syncResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data.Org = org
-	s.data.AvatarURL = avatarURL
-	s.data.Repos = repos
-	s.data.Pulls = pulls
-	s.data.RepoErrs = repoErrs
-	s.data.SyncedAt = &syncedAt
-	s.data.LastError = lastErr
-	s.data.RateLimit = rl
+	s.data.Org = res.org
+	s.data.AvatarURL = res.avatarURL
+	s.data.Repos = res.repos
+	s.data.Pulls = res.pulls
+	s.data.Runs = res.runs
+	s.data.RepoErrs = res.repoErrs
+	s.data.SyncedAt = &res.syncedAt
+	s.data.LastError = ""
+	s.data.RateLimit = res.rl
 }
 
 func (s *State) markSyncing(on bool) {

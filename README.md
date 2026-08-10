@@ -22,6 +22,7 @@ Primer design language, light and dark.
 | `/leaderboards` | Ranked table with tabs for Total lines / Additions / Deletions / Files changed / Commits, state filter |
 | `/contributors` | Per-author rankings: merged PRs, +/− lines, avg diff, largest PR, activity window |
 | `/repos` | Per-repository aggregates |
+| `/insights` | Shipping velocity (merged PRs, lines merged, cycle time) + CI health (runs, success rate, duration, workflow breakdown) — filterable by repository, period (3m/6m/12m/all) and granularity (weekly/monthly) |
 | `/pulls` | Full PR list with state/repo/search filters and pagination |
 | `/api/status` | Sync status as JSON |
 | `POST /api/sync` | Trigger a refresh |
@@ -66,7 +67,11 @@ tailscale serve --bg --https=18443 http://127.0.0.1:8787
 
 - Only merged PRs count towards leaderboards by default; use the state filter
   to include open/closed PRs.
+- CI data (workflow runs) is fetched incrementally — the full history on the
+  first sync, only new runs afterwards. The runs endpoint is slow, so pages
+  are fetched in parallel.
 - A per-repo sync failure keeps the last synced data for that repo and shows
   a warning banner — the dashboard never degrades on transient errors.
 - Charts are server-rendered SVG, styled with CSS variables, so they adapt to
   the theme automatically.
+- Cycle time = median days from PR opened to merged, per bucket.

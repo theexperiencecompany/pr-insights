@@ -338,3 +338,234 @@ func CountState(pulls []Pull) (open, merged, closed int) {
 	}
 	return
 }
+
+// Granularity is the time bucket used by the insight series.
+type Granularity string
+
+const (
+	GranWeek  Granularity = "week"
+	GranMonth Granularity = "month"
+)
+
+// bucketKey maps a time to its bucket key and label.
+// Week buckets start on Mondays; labels are "Jan 6" / "Aug '26".
+func bucketKey(t time.Time, g Granularity) (key, label string) {
+	utc := t.UTC()
+	if g == GranWeek {
+		// Monday of the ISO week.
+		wd := (int(utc.Weekday()) + 6) % 7
+		monday := utc.AddDate(0, 0, -wd)
+		m := time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, time.UTC)
+		return m.Format("2006-01-02"), m.Format("Jan 2")
+	}
+	return utc.Format("2006-01"), utc.Format("Jan 06")
+}
+
+// ShipBucket is one time bucket of merged-PR shipping activity.
+type ShipBucket struct {
+	Label           string
+	Merged          int
+	Additions       int
+	Deletions       int
+	CycleMedianDays float64
+	CycleCount      int
+}
+
+// ShippingSeries buckets merged pulls by merge time. repo filters to one
+// repository ("" = all); since excludes older buckets (zero = all time).
+func ShippingSeries(pulls []Pull, repo string, g Granularity, since time.Time) []ShipBucket {
+	order := make([]string, 0)
+	byKey := make(map[string]*ShipBucket)
+	cycles := make(map[string][]float64)
+
+	for i := range pulls {
+		p := &pulls[i]
+		if p.State != "MERGED" || p.MergedAt == nil {
+			continue
+		}
+		if repo != "" && p.Repo != repo {
+			continue
+		}
+		key, label := bucketKey(*p.MergedAt, g)
+		if !since.IsZero() && key < bucketKeyFloor(since, g) {
+			continue
+		}
+		b := byKey[key]
+		if b == nil {
+			b = &ShipBucket{Label: label}
+			byKey[key] = b
+			order = append(order, key)
+		}
+		b.Merged++
+		b.Additions += p.Additions
+		b.Deletions += p.Deletions
+		cycles[key] = append(cycles[key], p.MergedAt.Sub(p.CreatedAt).Hours()/24)
+	}
+
+	sort.Strings(order)
+	out := make([]ShipBucket, 0, len(order))
+	for _, k := range order {
+		b := byKey[k]
+		if c := cycles[k]; len(c) > 0 {
+			b.CycleMedianDays = medianFloat(c)
+			b.CycleCount = len(c)
+		}
+		out = append(out, *b)
+	}
+	return out
+}
+
+// bucketKeyFloor returns the earliest bucket key that must be kept.
+func bucketKeyFloor(since time.Time, g Granularity) string {
+	if g == GranWeek {
+		key, _ := bucketKey(since, GranWeek)
+		return key
+	}
+	return since.UTC().Format("2006-01")
+}
+
+// CIBucket is one time bucket of workflow-run activity.
+type CIBucket struct {
+	Label             string
+	Total             int
+	Success           int
+	Failure           int
+	Other             int
+	SuccessRate       float64
+	MedianDurationMin float64
+}
+
+// CISeries buckets workflow runs by run start time.
+func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucket {
+	order := make([]string, 0)
+	byKey := make(map[string]*CIBucket)
+	durations := make(map[string][]float64)
+
+	for i := range runs {
+		r := &runs[i]
+		if r.RunStartedAt.IsZero() {
+			continue
+		}
+		if repo != "" && r.Repo != repo {
+			continue
+		}
+		key, label := bucketKey(r.RunStartedAt, g)
+		if !since.IsZero() && key < bucketKeyFloor(since, g) {
+			continue
+		}
+		b := byKey[key]
+		if b == nil {
+			b = &CIBucket{Label: label}
+			byKey[key] = b
+			order = append(order, key)
+		}
+		b.Total++
+		switch r.Conclusion {
+		case "success":
+			b.Success++
+		case "failure":
+			b.Failure++
+		default:
+			b.Other++
+		}
+		if r.Conclusion == "success" || r.Conclusion == "failure" {
+			durations[key] = append(durations[key], float64(r.DurationSec)/60)
+		}
+	}
+
+	sort.Strings(order)
+	out := make([]CIBucket, 0, len(order))
+	for _, k := range order {
+		b := byKey[k]
+		if b.Total > 0 {
+			b.SuccessRate = float64(b.Success) / float64(b.Total) * 100
+		}
+		if d := durations[k]; len(d) > 0 {
+			b.MedianDurationMin = medianFloat(d)
+		}
+		out = append(out, *b)
+	}
+	return out
+}
+
+// WorkflowStat aggregates CI stats per workflow.
+type WorkflowStat struct {
+	Repo              string
+	Workflow          string
+	Runs              int
+	Success           int
+	SuccessRate       float64
+	MedianDurationMin float64
+	LastRunAt         *time.Time
+	LastConclusion    string
+}
+
+// WorkflowStats aggregates runs per workflow, ranked by run count.
+func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
+	idx := make(map[string]*WorkflowStat)
+	durations := make(map[string][]float64)
+	order := make([]string, 0)
+
+	for i := range runs {
+		r := &runs[i]
+		if repo != "" && r.Repo != repo {
+			continue
+		}
+		if !since.IsZero() && r.CreatedAt.Before(since) {
+			continue
+		}
+		key := r.Repo + "/" + r.Workflow
+		st := idx[key]
+		if st == nil {
+			st = &WorkflowStat{Repo: r.Repo, Workflow: r.Workflow}
+			idx[key] = st
+			order = append(order, key)
+		}
+		st.Runs++
+		if r.Conclusion == "success" {
+			st.Success++
+		}
+		if r.Conclusion == "success" || r.Conclusion == "failure" {
+			durations[key] = append(durations[key], float64(r.DurationSec)/60)
+		}
+		if st.LastRunAt == nil || r.CreatedAt.After(*st.LastRunAt) {
+			t := r.CreatedAt
+			st.LastRunAt = &t
+			st.LastConclusion = r.Conclusion
+		}
+	}
+
+	out := make([]WorkflowStat, 0, len(idx))
+	for _, k := range order {
+		st := idx[k]
+		if st.Runs > 0 {
+			st.SuccessRate = float64(st.Success) / float64(st.Runs) * 100
+		}
+		if d := durations[k]; len(d) > 0 {
+			st.MedianDurationMin = medianFloat(d)
+		}
+		out = append(out, *st)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Runs != out[j].Runs {
+			return out[i].Runs > out[j].Runs
+		}
+		return out[i].Repo+"|"+out[i].Workflow < out[j].Repo+"|"+out[j].Workflow
+	})
+	return out
+}
+
+// medianFloat returns the median of a numeric slice (0 for empty).
+func medianFloat(v []float64) float64 {
+	if len(v) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(v))
+	copy(sorted, v)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
+}
