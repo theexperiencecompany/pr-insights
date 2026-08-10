@@ -5,6 +5,9 @@
 # The GitHub token is taken from GITHUB_TOKEN, falling back to `gh auth token`.
 set -euo pipefail
 
+# mise-managed toolchain (go) lives behind the mise shims
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+
 HOST="${1:?usage: deploy.sh <host> [binary]}"
 BIN="${2:-./pr-insights}"
 SRV=pr-insights
