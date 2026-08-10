@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -46,6 +47,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /pulls", s.handlePulls)
 	mux.HandleFunc("POST /api/sync", s.handleSync)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/overview", s.handleAPIOverview)
+	mux.HandleFunc("GET /api/leaderboards", s.handleAPILeaderboards)
+	mux.HandleFunc("GET /api/contributors", s.handleAPIContributors)
+	mux.HandleFunc("GET /api/repos", s.handleAPIRepos)
+	mux.HandleFunc("GET /api/insights", s.handleAPIInsights)
+	mux.HandleFunc("GET /api/pulls", s.handleAPIPulls)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte("ok\n"))
@@ -116,46 +123,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	open, merged, closed := CountState(snap.Pulls)
-	contribs := Contributors(snap.Pulls)
-	repos := RepoStats(snap.Pulls, snap.Repos)
-	monthly := MonthlySeries(snap.Pulls)
+	ov := computeOverview(snap)
+	monthly := ov.Monthly
 
-	var additions, deletions, files, commits int
-	for _, p := range snap.Pulls {
-		if p.State == "MERGED" {
-			additions += p.Additions
-			deletions += p.Deletions
-			files += p.ChangedFiles
-			commits += p.Commits
-		}
-	}
-	avgDiff, avgFiles := 0, 0
-	if merged > 0 {
-		avgDiff = (additions + deletions) / merged
-		avgFiles = files / merged
-	}
-
-	largest := Rank(PullsByState(snap.Pulls, "MERGED"), MetricDiff)
-	if len(largest) > 5 {
-		largest = largest[:5]
-	}
-
-	recent := make([]Pull, 0)
-	for _, p := range PullsByState(snap.Pulls, "MERGED") {
-		if p.MergedAt != nil {
-			recent = append(recent, p)
-		}
-	}
-	SortPullsByMerged(recent)
-	if len(recent) > 10 {
-		recent = recent[:10]
-	}
-
-	top := contribs
-	if len(top) > 10 {
-		top = top[:10]
-	}
+	top := ov.TopContributors
 	maxMerged := 0
 	if len(top) > 0 {
 		maxMerged = top[0].Merged
@@ -175,13 +146,8 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 	s.render(w, r, "overview", struct {
 		baseData
-		Stats struct {
-			Total, Merged, Open, Closed int
-			Additions, Deletions        int
-			Files, Commits              int
-			AvgDiff, AvgFiles           int
-		}
-		Monthly        []MonthStat
+		Stats          overviewStats
+		Monthly        []ShipBucket
 		MonthlyChart   template.HTML
 		StackedChart   template.HTML
 		TopContributor []barContributor
@@ -189,25 +155,15 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		Repos          []RepoStat
 		Recent         []Pull
 	}{
-		baseData: b,
-		Stats: struct {
-			Total, Merged, Open, Closed int
-			Additions, Deletions        int
-			Files, Commits              int
-			AvgDiff, AvgFiles           int
-		}{
-			Total: len(snap.Pulls), Merged: merged, Open: open, Closed: closed,
-			Additions: additions, Deletions: deletions,
-			Files: files, Commits: commits,
-			AvgDiff: avgDiff, AvgFiles: avgFiles,
-		},
+		baseData:       b,
+		Stats:          ov.Stats,
 		Monthly:        monthly,
-		MonthlyChart:   monthBarsSVG(monthly, func(m MonthStat) int { return m.Merged }, "accent", "Merged pull requests by month"),
+		MonthlyChart:   monthBarsSVG(monthly, func(m ShipBucket) int { return m.Merged }, "accent", "Merged pull requests by month"),
 		StackedChart:   monthStackedBarsSVG(monthly),
 		TopContributor: bars,
-		Largest:        largest,
-		Repos:          repos,
-		Recent:         recent,
+		Largest:        ov.Largest,
+		Repos:          ov.Repos,
+		Recent:         ov.Recent,
 	})
 }
 
@@ -225,11 +181,7 @@ func (s *Server) handleLeaderboards(w http.ResponseWriter, r *http.Request) {
 	}
 	page := queryInt(r, "page", 1)
 
-	pulls := PullsByState(snap.Pulls, state)
-	ranked := Rank(pulls, metric)
-
-	pg := paginate(len(ranked), page, perPage)
-	rows := ranked[pg.From:pg.To]
+	rows, pg := computeLeaderboards(snap, metric, state, page)
 
 	base := "/leaderboards"
 	pg.PrevHref = queryHref(base, "metric", string(metric), "state", state, "page", strconv.Itoa(pg.Page-1))
@@ -316,22 +268,11 @@ func (s *Server) handlePulls(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	page := queryInt(r, "page", 1)
 
-	pulls := SearchPulls(snap.Pulls, repo, state, q)
-	SortPulls(pulls, "")
-
-	pg := paginate(len(pulls), page, perPage)
-	rows := pulls[pg.From:pg.To]
+	rows, pg, repoOptions := computePulls(snap, repo, state, q, page)
 
 	base := "/pulls"
 	pg.PrevHref = queryHref(base, "repo", repo, "state", state, "q", q, "page", strconv.Itoa(pg.Page-1))
 	pg.NextHref = queryHref(base, "repo", repo, "state", state, "q", q, "page", strconv.Itoa(pg.Page+1))
-
-	repoOptions := make([]RepoInfo, 0)
-	for _, rs := range RepoStats(snap.Pulls, snap.Repos) {
-		if rs.Total > 0 {
-			repoOptions = append(repoOptions, rs.RepoInfo)
-		}
-	}
 
 	s.render(w, r, "pulls", struct {
 		baseData
@@ -362,19 +303,8 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
 		gran = GranMonth
 	}
 
-	var since time.Time
-	switch period {
-	case "3m":
-		since = time.Now().UTC().AddDate(0, -3, 0)
-	case "6m":
-		since = time.Now().UTC().AddDate(0, -6, 0)
-	case "12m":
-		since = time.Now().UTC().AddDate(0, -12, 0)
-	}
-
-	ship := ShippingSeries(snap.Pulls, repo, gran, since)
-	ci := CISeries(snap.Runs, repo, gran, since)
-	workflows := WorkflowStats(snap.Runs, repo, since)
+	ins := computeInsights(snap, repo, period, gran)
+	ship, ci, workflows := ins.Ship, ins.CI, ins.Workflows
 
 	mergedLabels := make([]string, len(ship))
 	mergedVals := make([]float64, len(ship))
@@ -396,26 +326,6 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
 		durVals[i] = bkt.MedianDurationMin
 	}
 
-	var ciTotal, ciSuccess, ciWorkflows int
-	var ciDur []float64
-	for _, wf := range workflows {
-		ciTotal += wf.Runs
-		ciSuccess += wf.Success
-		ciWorkflows++
-		ciDur = append(ciDur, wf.MedianDurationMin)
-	}
-	ciRate := 0.0
-	if ciTotal > 0 {
-		ciRate = float64(ciSuccess) / float64(ciTotal) * 100
-	}
-
-	repoOptions := make([]RepoInfo, 0)
-	for _, rs := range RepoStats(snap.Pulls, snap.Repos) {
-		if rs.Total > 0 {
-			repoOptions = append(repoOptions, rs.RepoInfo)
-		}
-	}
-
 	s.render(w, r, "insights", struct {
 		baseData
 		Repo             string
@@ -430,19 +340,14 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
 		SuccessRateChart template.HTML
 		DurationChart    template.HTML
 		HasCI            bool
-		CI               struct {
-			TotalRuns      int
-			SuccessRate    float64
-			MedianDuration float64
-			Workflows      int
-		}
-		Workflows []WorkflowStat
+		CI               insightsStats
+		Workflows        []WorkflowStat
 	}{
 		baseData:         b,
 		Repo:             repo,
 		Period:           period,
 		Gran:             string(gran),
-		RepoOptions:      repoOptions,
+		RepoOptions:      ins.RepoOptions,
 		MergedChart:      lineChartSVG(mergedLabels, mergedVals, "", "accent", "Pull requests merged over time", 0),
 		LinesChart:       lineChartSVG(mergedLabels, linesVals, "", "add", "Lines merged over time", 0),
 		CycleChart:       lineChartSVG(mergedLabels, cycleVals, "d", "other", "Median cycle time over time", 0),
@@ -451,15 +356,8 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request) {
 		SuccessRateChart: lineChartSVG(ciLabels, rateVals, "%", "add", "CI success rate over time", 100),
 		DurationChart:    lineChartSVG(ciLabels, durVals, "min", "accent", "Median CI duration over time", 0),
 		HasCI:            len(ci) > 0,
-		CI: struct {
-			TotalRuns      int
-			SuccessRate    float64
-			MedianDuration float64
-			Workflows      int
-		}{
-			TotalRuns: ciTotal, SuccessRate: ciRate, MedianDuration: medianFloat(ciDur), Workflows: ciWorkflows,
-		},
-		Workflows: workflows,
+		CI:               ins.CIStats,
+		Workflows:        workflows,
 	})
 }
 
@@ -512,7 +410,24 @@ type pager struct {
 	Total, Page, Pages, PerPage int
 	From, To                    int
 	HasPrev, HasNext            bool
-	PrevHref, NextHref          string
+	PrevHref, NextHref          string `json:"-"`
+}
+
+// MarshalJSON renders the pager with JSON field names for the API.
+func (p pager) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Total   int  `json:"total"`
+		Page    int  `json:"page"`
+		Pages   int  `json:"pages"`
+		PerPage int  `json:"perPage"`
+		From    int  `json:"from"`
+		To      int  `json:"to"`
+		HasPrev bool `json:"hasPrev"`
+		HasNext bool `json:"hasNext"`
+	}{
+		Total: p.Total, Page: p.Page, Pages: p.Pages, PerPage: p.PerPage,
+		From: p.From, To: p.To, HasPrev: p.HasPrev, HasNext: p.HasNext,
+	})
 }
 
 func paginate(total, page, perPage int) pager {

@@ -60,8 +60,8 @@ func (m Metric) Value(p Pull) int {
 
 // RankedPull is a pull annotated with its leaderboard value.
 type RankedPull struct {
-	Pull  Pull
-	Value int
+	Pull  Pull `json:"pull"`
+	Value int  `json:"value"`
 }
 
 // Rank returns pulls sorted by the metric, descending.
@@ -85,22 +85,23 @@ func Rank(pulls []Pull, m Metric) []RankedPull {
 
 // Contributor aggregates all metrics for one author.
 type Contributor struct {
-	Login      string
-	Merged     int
-	Additions  int
-	Deletions  int
-	Files      int
-	Commits    int
-	AvgDiff    int
-	Largest    *Pull
-	ReposCount int
-	First      *time.Time
-	Last       *time.Time
+	Login      string     `json:"login"`
+	Merged     int        `json:"merged"`
+	Additions  int        `json:"additions"`
+	Deletions  int        `json:"deletions"`
+	Files      int        `json:"files"`
+	Commits    int        `json:"commits"`
+	AvgDiff    int        `json:"avgDiff"`
+	Largest    *Pull      `json:"largest,omitempty"`
+	ReposCount int        `json:"reposCount"`
+	First      *time.Time `json:"first,omitempty"`
+	Last       *time.Time `json:"last,omitempty"`
 }
 
 // Contributors aggregates merged pulls per author, ranked by merge count.
 func Contributors(pulls []Pull) []Contributor {
 	byLogin := make(map[string]*Contributor)
+	reposByLogin := make(map[string]map[string]bool)
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" {
@@ -110,12 +111,14 @@ func Contributors(pulls []Pull) []Contributor {
 		if c == nil {
 			c = &Contributor{Login: p.Author}
 			byLogin[p.Author] = c
+			reposByLogin[p.Author] = make(map[string]bool)
 		}
 		c.Merged++
 		c.Additions += p.Additions
 		c.Deletions += p.Deletions
 		c.Files += p.ChangedFiles
 		c.Commits += p.Commits
+		reposByLogin[p.Author][p.Repo] = true
 		if p.MergedAt != nil {
 			if c.First == nil || p.MergedAt.Before(*c.First) {
 				t := *p.MergedAt
@@ -134,6 +137,7 @@ func Contributors(pulls []Pull) []Contributor {
 	for _, c := range byLogin {
 		if c.Merged > 0 {
 			c.AvgDiff = (c.Additions + c.Deletions) / c.Merged
+			c.ReposCount = len(reposByLogin[c.Login])
 			out = append(out, *c)
 		}
 	}
@@ -152,17 +156,17 @@ func Contributors(pulls []Pull) []Contributor {
 // RepoStat aggregates all pull activity per repository.
 type RepoStat struct {
 	RepoInfo
-	Total        int
-	Merged       int
-	Open         int
-	Closed       int
-	Additions    int
-	Deletions    int
-	AvgDiff      int
-	Largest      *Pull
-	Contributors int
-	First        *time.Time
-	Last         *time.Time
+	Total        int        `json:"total"`
+	Merged       int        `json:"merged"`
+	Open         int        `json:"open"`
+	Closed       int        `json:"closed"`
+	Additions    int        `json:"additions"`
+	Deletions    int        `json:"deletions"`
+	AvgDiff      int        `json:"avgDiff"`
+	Largest      *Pull      `json:"largest,omitempty"`
+	Contributors int        `json:"contributors"`
+	First        *time.Time `json:"first,omitempty"`
+	Last         *time.Time `json:"last,omitempty"`
 }
 
 // RepoStats aggregates per-repo metrics, ranked by total PR count.
@@ -240,9 +244,10 @@ type MonthStat struct {
 }
 
 // MonthlySeries buckets merged pulls by merge month, oldest first.
-func MonthlySeries(pulls []Pull) []MonthStat {
-	byMonth := make(map[string]*MonthStat)
+func MonthlySeries(pulls []Pull) []ShipBucket {
+	byMonth := make(map[string]*ShipBucket)
 	order := make([]string, 0)
+
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" || p.MergedAt == nil {
@@ -251,7 +256,7 @@ func MonthlySeries(pulls []Pull) []MonthStat {
 		key := p.MergedAt.UTC().Format("2006-01")
 		st := byMonth[key]
 		if st == nil {
-			st = &MonthStat{Month: key, Label: p.MergedAt.UTC().Format("Jan 06")}
+			st = &ShipBucket{Label: p.MergedAt.UTC().Format("Jan 06")}
 			byMonth[key] = st
 			order = append(order, key)
 		}
@@ -260,7 +265,7 @@ func MonthlySeries(pulls []Pull) []MonthStat {
 		st.Deletions += p.Deletions
 	}
 	sort.Strings(order)
-	out := make([]MonthStat, 0, len(order))
+	out := make([]ShipBucket, 0, len(order))
 	for _, k := range order {
 		out = append(out, *byMonth[k])
 	}
@@ -363,12 +368,12 @@ func bucketKey(t time.Time, g Granularity) (key, label string) {
 
 // ShipBucket is one time bucket of merged-PR shipping activity.
 type ShipBucket struct {
-	Label           string
-	Merged          int
-	Additions       int
-	Deletions       int
-	CycleMedianDays float64
-	CycleCount      int
+	Label           string  `json:"label"`
+	Merged          int     `json:"merged"`
+	Additions       int     `json:"additions"`
+	Deletions       int     `json:"deletions"`
+	CycleMedianDays float64 `json:"cycleMedianDays"`
+	CycleCount      int     `json:"cycleCount"`
 }
 
 // ShippingSeries buckets merged pulls by merge time. repo filters to one
@@ -426,13 +431,13 @@ func bucketKeyFloor(since time.Time, g Granularity) string {
 
 // CIBucket is one time bucket of workflow-run activity.
 type CIBucket struct {
-	Label             string
-	Total             int
-	Success           int
-	Failure           int
-	Other             int
-	SuccessRate       float64
-	MedianDurationMin float64
+	Label             string  `json:"label"`
+	Total             int     `json:"total"`
+	Success           int     `json:"success"`
+	Failure           int     `json:"failure"`
+	Other             int     `json:"other"`
+	SuccessRate       float64 `json:"successRate"`
+	MedianDurationMin float64 `json:"medianDurationMin"`
 }
 
 // CISeries buckets workflow runs by run start time.
@@ -490,14 +495,14 @@ func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucke
 
 // WorkflowStat aggregates CI stats per workflow.
 type WorkflowStat struct {
-	Repo              string
-	Workflow          string
-	Runs              int
-	Success           int
-	SuccessRate       float64
-	MedianDurationMin float64
-	LastRunAt         *time.Time
-	LastConclusion    string
+	Repo              string     `json:"repo"`
+	Workflow          string     `json:"workflow"`
+	Runs              int        `json:"runs"`
+	Success           int        `json:"success"`
+	SuccessRate       float64    `json:"successRate"`
+	MedianDurationMin float64    `json:"medianDurationMin"`
+	LastRunAt         *time.Time `json:"lastRunAt,omitempty"`
+	LastConclusion    string     `json:"lastConclusion"`
 }
 
 // WorkflowStats aggregates runs per workflow, ranked by run count.

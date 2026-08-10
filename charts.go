@@ -218,7 +218,7 @@ func compact(n int) string {
 }
 
 // monthBarsSVG renders a vertical bar chart of monthly values.
-func monthBarsSVG(series []MonthStat, value func(MonthStat) int, accent string, title string) template.HTML {
+func monthBarsSVG(series []ShipBucket, value func(ShipBucket) int, accent string, title string) template.HTML {
 	if len(series) == 0 {
 		return template.HTML("")
 	}
@@ -276,7 +276,7 @@ func monthBarsSVG(series []MonthStat, value func(MonthStat) int, accent string, 
 }
 
 // monthStackedBarsSVG renders monthly additions + deletions as stacked bars.
-func monthStackedBarsSVG(series []MonthStat) template.HTML {
+func monthStackedBarsSVG(series []ShipBucket) template.HTML {
 	if len(series) == 0 {
 		return template.HTML("")
 	}
