@@ -15,8 +15,8 @@ echo "==> building frontend (frontend/dist)"
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend build
 
-echo "==> building Go binary (embeds frontend/dist)"
-go build -o "$BIN" .
+echo "==> building Go binary (linux/amd64, embeds frontend/dist)"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$BIN" .
 
 if [[ ! -f "$BIN" ]]; then
   echo "binary not found: $BIN (build it first: go build -o pr-insights .)" >&2
@@ -45,7 +45,7 @@ echo "==> creating service user (if needed)"
 ssh "$HOST" "sudo id prinsights >/dev/null 2>&1 || sudo useradd --system --no-create-home --home-dir /opt/pr-insights --shell /usr/sbin/nologin prinsights"
 
 echo "==> starting service"
-ssh "$HOST" "sudo systemctl enable --now pr-insights && sleep 2 && sudo systemctl status pr-insights --no-pager | head -8"
+ssh "$HOST" "sudo systemctl enable pr-insights && sudo systemctl restart pr-insights && sleep 2 && sudo systemctl status pr-insights --no-pager | head -8"
 
 echo "==> smoke test"
 ssh "$HOST" "curl -sf http://127.0.0.1:8787/healthz && echo '  -> healthz ok'"
