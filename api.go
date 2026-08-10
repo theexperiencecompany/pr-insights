@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -27,18 +28,21 @@ type overviewStats struct {
 }
 
 type apiOverview struct {
-	Org             string        `json:"org"`
-	AvatarURL       string        `json:"avatarUrl"`
-	SyncedAt        *time.Time    `json:"syncedAt,omitempty"`
-	LastError       string        `json:"lastError,omitempty"`
-	RepoErrorCount  int           `json:"repoErrorCount"`
-	Stats           overviewStats `json:"stats"`
-	Contributors    int           `json:"contributors"`
-	Monthly         []ShipBucket  `json:"monthly"`
-	TopContributors []Contributor `json:"topContributors"`
-	Largest         []RankedPull  `json:"largest"`
-	Repos           []RepoStat    `json:"repos"`
-	Recent          []Pull        `json:"recent"`
+	Org             string           `json:"org"`
+	AvatarURL       string           `json:"avatarUrl"`
+	SyncedAt        *time.Time       `json:"syncedAt,omitempty"`
+	LastError       string           `json:"lastError,omitempty"`
+	RepoErrorCount  int              `json:"repoErrorCount"`
+	Stats           overviewStats    `json:"stats"`
+	Contributors    int              `json:"contributors"`
+	Monthly         []ShipBucket     `json:"monthly"`
+	TopContributors []Contributor    `json:"topContributors"`
+	Largest         []RankedPull     `json:"largest"`
+	Velocity        []VelocityDelta  `json:"velocity"`
+	Bot             BotSplit         `json:"bot"`
+	ShipDist        ShipDistribution `json:"shipDist"`
+	Bus             BusFactor        `json:"bus"`
+	Heatmap         []DayCount       `json:"heatmap"`
 }
 
 type apiInsights struct {
@@ -47,6 +51,7 @@ type apiInsights struct {
 	Gran        string         `json:"gran"`
 	RepoOptions []RepoInfo     `json:"repoOptions"`
 	Ship        []ShipBucket   `json:"ship"`
+	ShipPrev    []ShipBucket   `json:"shipPrev,omitempty"` // prior-year series when period=12m
 	CI          []CIBucket     `json:"ci"`
 	CIStats     insightsStats  `json:"ciStats"`
 	Workflows   []WorkflowStat `json:"workflows"`
@@ -64,7 +69,6 @@ type insightsStats struct {
 func computeOverview(snap Data) apiOverview {
 	open, merged, closed := CountState(snap.Pulls)
 	contribs := Contributors(snap.Pulls)
-	repos := RepoStats(snap.Pulls, snap.Repos)
 	monthly := MonthlySeries(snap.Pulls)
 
 	var additions, deletions, files, commits int
@@ -83,20 +87,9 @@ func computeOverview(snap Data) apiOverview {
 		avgFiles = files / merged
 	}
 
-	largest := Rank(PullsByState(snap.Pulls, "MERGED"), MetricDiff)
+	largest := Rank(PullsByState(snap.Pulls, "MERGED"), MetricDiff, false)
 	if len(largest) > 5 {
 		largest = largest[:5]
-	}
-
-	recent := make([]Pull, 0)
-	for _, p := range PullsByState(snap.Pulls, "MERGED") {
-		if p.MergedAt != nil {
-			recent = append(recent, p)
-		}
-	}
-	SortPullsByMerged(recent)
-	if len(recent) > 10 {
-		recent = recent[:10]
 	}
 
 	top := contribs
@@ -120,22 +113,64 @@ func computeOverview(snap Data) apiOverview {
 		Monthly:         monthly,
 		TopContributors: top,
 		Largest:         largest,
-		Repos:           repos,
-		Recent:          recent,
+		Velocity:        VelocityDeltas(snap.Pulls),
+		Bot:             BotSplitOf(snap.Pulls),
+		ShipDist:        ShipDistributionOf(snap.Pulls),
+		Bus:             BusFactorOf(contribs, merged),
+		Heatmap:         Heatmap(snap.Pulls, "", 365),
 	}
 }
 
-func computeLeaderboards(snap Data, metric Metric, state string, page int) (rows []RankedPull, pg pager) {
-	ranked := Rank(PullsByState(snap.Pulls, state), metric)
+// computeLeaderboards ranks pulls with optional filters: order direction,
+// repo, author and a merged-date window (from/to as YYYY-MM-DD).
+func computeLeaderboards(snap Data, metric Metric, state string, page int, asc bool, repo, author, from, to string) (rows []RankedPull, pg pager) {
+	pulls := PullsByState(snap.Pulls, state)
+	if repo != "" {
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			if p.Repo == repo {
+				filtered = append(filtered, p)
+			}
+		}
+		pulls = filtered
+	}
+	if author != "" {
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			if p.Author == author {
+				filtered = append(filtered, p)
+			}
+		}
+		pulls = filtered
+	}
+	var fromT, toT time.Time
+	if from != "" {
+		fromT, _ = time.Parse("2006-01-02", from)
+	}
+	if to != "" {
+		toT, _ = time.Parse("2006-01-02", to)
+		toT = toT.AddDate(0, 0, 1) // inclusive end of day
+	}
+	if !fromT.IsZero() || !toT.IsZero() {
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			t := p.MergedAt
+			if t == nil {
+				continue
+			}
+			if !fromT.IsZero() && t.Before(fromT) {
+				continue
+			}
+			if !toT.IsZero() && !t.Before(toT) {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		pulls = filtered
+	}
+	ranked := Rank(pulls, metric, asc)
 	pg = paginate(len(ranked), page, perPage)
 	return ranked[pg.From:pg.To], pg
-}
-
-func computePulls(snap Data, repo, state, q string, page int) (rows []Pull, pg pager, repoOptions []RepoInfo) {
-	pulls := SearchPulls(snap.Pulls, repo, state, q)
-	SortPulls(pulls, "")
-	pg = paginate(len(pulls), page, perPage)
-	return pulls[pg.From:pg.To], pg, repoOptionsWithPulls(snap)
 }
 
 // repoOptionsWithPulls lists repos that have at least one pull.
@@ -147,6 +182,53 @@ func repoOptionsWithPulls(snap Data) []RepoInfo {
 		}
 	}
 	return out
+}
+
+// ShameList is the "hall of shame": oldest open PRs and biggest closed ones.
+type ShameList struct {
+	LongestOpen   []ShameEntry `json:"longestOpen"`
+	BiggestClosed []ShameEntry `json:"biggestClosed"`
+}
+
+// ShameEntry is one hall-of-shame row with a human-readable value.
+type ShameEntry struct {
+	Pull  Pull    `json:"pull"`
+	Value float64 `json:"value"` // days open (longestOpen) or total lines (biggestClosed)
+}
+
+func computeShame(snap Data) ShameList {
+	open := PullsByState(snap.Pulls, "OPEN")
+	sort.Slice(open, func(i, j int) bool {
+		if !open[i].CreatedAt.Equal(open[j].CreatedAt) {
+			return open[i].CreatedAt.Before(open[j].CreatedAt)
+		}
+		return open[i].Number < open[j].Number
+	})
+	longest := make([]ShameEntry, 0, 5)
+	for _, p := range open {
+		if len(longest) == 5 {
+			break
+		}
+		longest = append(longest, ShameEntry{Pull: p, Value: time.Since(p.CreatedAt).Hours() / 24})
+	}
+
+	closed := PullsByState(snap.Pulls, "CLOSED")
+	sort.Slice(closed, func(i, j int) bool {
+		di := closed[i].Additions + closed[i].Deletions
+		dj := closed[j].Additions + closed[j].Deletions
+		if di != dj {
+			return di > dj
+		}
+		return closed[i].Number > closed[j].Number
+	})
+	biggest := make([]ShameEntry, 0, 5)
+	for _, p := range closed {
+		if len(biggest) == 5 {
+			break
+		}
+		biggest = append(biggest, ShameEntry{Pull: p, Value: float64(p.Additions + p.Deletions)})
+	}
+	return ShameList{LongestOpen: longest, BiggestClosed: biggest}
 }
 
 func computeInsights(snap Data, repo, period string, gran Granularity) apiInsights {
@@ -161,6 +243,11 @@ func computeInsights(snap Data, repo, period string, gran Granularity) apiInsigh
 	}
 
 	ship := ShippingSeries(snap.Pulls, repo, gran, since)
+	var shipPrev []ShipBucket
+	if period == "12m" {
+		prevSince := since.AddDate(0, -12, 0)
+		shipPrev = ShippingSeriesRange(snap.Pulls, repo, gran, prevSince, since)
+	}
 	ci := CISeries(snap.Runs, repo, gran, since)
 	workflows := WorkflowStats(snap.Runs, repo, since)
 
@@ -183,6 +270,7 @@ func computeInsights(snap Data, repo, period string, gran Granularity) apiInsigh
 		Gran:        string(gran),
 		RepoOptions: repoOptionsWithPulls(snap),
 		Ship:        ship,
+		ShipPrev:    shipPrev,
 		CI:          ci,
 		CIStats: insightsStats{
 			TotalRuns:      ciTotal,
@@ -218,14 +306,24 @@ func (s *Server) handleAPILeaderboards(w http.ResponseWriter, r *http.Request) {
 	if state == "" {
 		state = "merged"
 	}
+	asc := r.URL.Query().Get("order") == "asc"
 	page := queryInt(r, "page", 1)
-	rows, pg := computeLeaderboards(s.store.Snapshot(), metric, state, page)
+	snap := s.store.Snapshot()
+	rows, pg := computeLeaderboards(snap, metric, state, page, asc,
+		r.URL.Query().Get("repo"), r.URL.Query().Get("author"),
+		r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 	writeJSON(w, struct {
-		Metric string       `json:"metric"`
-		State  string       `json:"state"`
-		Rows   []RankedPull `json:"rows"`
-		Pager  pager        `json:"pager"`
-	}{string(metric), state, rows, pg})
+		Metric      string       `json:"metric"`
+		State       string       `json:"state"`
+		Order       string       `json:"order"`
+		Rows        []RankedPull `json:"rows"`
+		Pager       pager        `json:"pager"`
+		RepoOptions []RepoInfo   `json:"repoOptions"`
+	}{string(metric), state, r.URL.Query().Get("order"), rows, pg, repoOptionsWithPulls(snap)})
+}
+
+func (s *Server) handleAPIShame(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, computeShame(s.store.Snapshot()))
 }
 
 func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
@@ -234,11 +332,14 @@ func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
 	}{Contributors(s.store.Snapshot().Pulls)})
 }
 
-func (s *Server) handleAPIRepos(w http.ResponseWriter, r *http.Request) {
-	snap := s.store.Snapshot()
-	writeJSON(w, struct {
-		Rows []RepoStat `json:"rows"`
-	}{RepoStats(snap.Pulls, snap.Repos)})
+// handleAPIContributor serves the drill-down view for one author.
+func (s *Server) handleAPIContributor(w http.ResponseWriter, r *http.Request) {
+	login := r.URL.Query().Get("login")
+	if login == "" {
+		http.Error(w, "missing login", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, ContributorDetailOf(s.store.Snapshot().Pulls, login))
 }
 
 func (s *Server) handleAPIPulls(w http.ResponseWriter, r *http.Request) {
@@ -249,12 +350,59 @@ func (s *Server) handleAPIPulls(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query().Get("q")
 	page := queryInt(r, "page", 1)
-	rows, pg, repoOptions := computePulls(s.store.Snapshot(), repo, state, q, page)
+	order := r.URL.Query().Get("order")
+	sortMetric := Metric(r.URL.Query().Get("sort"))
+	if sortMetric == "created" {
+		sortMetric = ""
+	} else if r.URL.Query().Get("sort") != "" && !sortMetric.Valid() {
+		sortMetric = ""
+	}
+	snap := s.store.Snapshot()
+	pulls := SearchPulls(snap.Pulls, repo, state, q)
+	switch r.URL.Query().Get("bot") {
+	case "1", "true":
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			if p.IsBot {
+				filtered = append(filtered, p)
+			}
+		}
+		pulls = filtered
+	case "0", "false":
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			if !p.IsBot {
+				filtered = append(filtered, p)
+			}
+		}
+		pulls = filtered
+	}
+	if sortMetric == "" {
+		sort.Slice(pulls, func(i, j int) bool {
+			a, b := pulls[i], pulls[j]
+			if r.URL.Query().Get("sort") == "created" {
+				if !a.CreatedAt.Equal(b.CreatedAt) {
+					if order == "asc" {
+						return a.CreatedAt.Before(b.CreatedAt)
+					}
+					return a.CreatedAt.After(b.CreatedAt)
+				}
+				return a.Number > b.Number
+			}
+			if !a.UpdatedAt.Equal(b.UpdatedAt) {
+				return a.UpdatedAt.After(b.UpdatedAt)
+			}
+			return a.Number > b.Number
+		})
+	} else {
+		SortPulls(pulls, sortMetric)
+	}
+	pg := paginate(len(pulls), page, perPage)
 	writeJSON(w, struct {
 		Rows        []Pull     `json:"rows"`
 		Pager       pager      `json:"pager"`
 		RepoOptions []RepoInfo `json:"repoOptions"`
-	}{rows, pg, repoOptions})
+	}{pulls[pg.From:pg.To], pg, repoOptionsWithPulls(snap)})
 }
 
 func (s *Server) handleAPIInsights(w http.ResponseWriter, r *http.Request) {

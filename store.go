@@ -38,6 +38,7 @@ type Pull struct {
 	BaseRef      string     `json:"baseRef"`
 	HeadRef      string     `json:"headRef"`
 	URL          string     `json:"url"`
+	IsBot        bool       `json:"isBot"`
 }
 
 // Run is one GitHub Actions workflow run.

@@ -36,8 +36,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sync", s.handleSync)
 	mux.HandleFunc("GET /api/overview", s.handleAPIOverview)
 	mux.HandleFunc("GET /api/leaderboards", s.handleAPILeaderboards)
+	mux.HandleFunc("GET /api/shame", s.handleAPIShame)
 	mux.HandleFunc("GET /api/contributors", s.handleAPIContributors)
-	mux.HandleFunc("GET /api/repos", s.handleAPIRepos)
+	mux.HandleFunc("GET /api/contributor", s.handleAPIContributor)
 	mux.HandleFunc("GET /api/insights", s.handleAPIInsights)
 	mux.HandleFunc("GET /api/pulls", s.handleAPIPulls)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

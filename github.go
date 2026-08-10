@@ -356,6 +356,7 @@ func (s *Syncer) fetchRepoPulls(ctx context.Context, repo string) ([]Pull, error
 				BaseRef:      gp.BaseRefName,
 				HeadRef:      gp.HeadRefName,
 				URL:          gp.URL,
+				IsBot:        IsBot(authorLogin(gp.Author)),
 			})
 		}
 		if !prs.PageInfo.HasNextPage {
