@@ -15,6 +15,7 @@ var webFS embed.FS
 
 type Config struct {
 	Org          string
+	Repo         string
 	Addr         string
 	DataDir      string
 	SyncInterval time.Duration
@@ -29,6 +30,7 @@ func main() {
 
 	cfg := Config{
 		Org:          envOr("GITHUB_ORG", "theexperiencecompany"),
+		Repo:         envOr("GITHUB_REPO", "gaia"),
 		Addr:         envOr("PR_INSIGHTS_ADDR", "127.0.0.1:8787"),
 		DataDir:      envOr("PR_INSIGHTS_DATA_DIR", "./data"),
 		SyncInterval: envDurOr("PR_INSIGHTS_SYNC_INTERVAL", 6*time.Hour),
@@ -50,7 +52,7 @@ func main() {
 		store.clearSyncedAt()
 	}
 
-	syncer := NewSyncer(cfg.Org, token, store)
+	syncer := NewSyncer(cfg.Org, cfg.Repo, token, store)
 
 	srv, err := NewServer(store, syncer, webFS)
 	if err != nil {

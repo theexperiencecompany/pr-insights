@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom'
 import { getPulls, getStatus, type Pull } from '@/lib/api'
 import { comma } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
+import { cn } from '@/lib/utils'
 
 import { EmptyState } from '@/components/empty-state'
 import { Loading } from '@/components/loading'
@@ -193,10 +194,6 @@ export default function PullsPage() {
     updateParams(next)
   }
 
-  const handleRepoChange = (value: string) => {
-    updateParams({ repo: value === 'all' ? null : value, page: null })
-  }
-
   const handleSortChange = (value: string) => {
     const next: Record<string, string | null> = { page: null }
     if (value === 'updated') {
@@ -256,17 +253,36 @@ export default function PullsPage() {
                 const sizeInfo = sizeClass(size)
                 const cycle = cycleDays(pull)
                 return (
-                  <div key={`${pull.repo}#${pull.number}`} className="border-b border-border">
-                    <PrRow pull={pull} />
-                    <div className="flex flex-wrap items-center gap-2 px-4 pb-2.5 text-xs text-muted-foreground">
-                      <Badge data-testid="size-chip" className={sizeInfo.className}>
-                        {sizeInfo.label}
-                      </Badge>
-                      {cycle ? <span className="tabular-nums">{cycle}</span> : null}
-                      {pull.isBot ? <Badge variant="secondary">bot</Badge> : null}
-                      {pull.isDraft ? <Badge variant="outline">draft</Badge> : null}
-                    </div>
-                  </div>
+                  <PrRow
+                    key={`${pull.repo}#${pull.number}`}
+                    pull={pull}
+                    extras={
+                      <>
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            data-testid="size-chip"
+                            className={cn(
+                              'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
+                              sizeInfo.className,
+                            )}
+                          >
+                            {sizeInfo.label}
+                          </span>
+                          {cycle ? <span className="tabular-nums">{cycle}</span> : null}
+                          {pull.isBot ? (
+                            <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
+                              bot
+                            </span>
+                          ) : null}
+                          {pull.isDraft ? (
+                            <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
+                              draft
+                            </span>
+                          ) : null}
+                        </span>
+                      </>
+                    }
+                  />
                 )
               })}
             </Card>
@@ -296,19 +312,6 @@ export default function PullsPage() {
             {STATE_OPTIONS.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={repoParam} onValueChange={handleRepoChange}>
-          <SelectTrigger aria-label="Filter by repository" className="max-w-60">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All repositories</SelectItem>
-            {data?.repoOptions.map((repo) => (
-              <SelectItem key={repo.name} value={repo.name}>
-                {repo.name}
               </SelectItem>
             ))}
           </SelectContent>

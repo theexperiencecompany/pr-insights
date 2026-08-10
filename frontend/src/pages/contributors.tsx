@@ -1,6 +1,7 @@
 import { Flame } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
+import { ContributorBar } from '@/components/contributor-bar'
 import { EmptyState } from '@/components/empty-state'
 import { Heatmap } from '@/components/heatmap'
 import { Loading } from '@/components/loading'
@@ -53,39 +54,7 @@ export default function ContributorsPage() {
           <CardContent>
             <div className="flex flex-col gap-1.5">
               {top10.map((c) => (
-                <div key={c.login} className="flex items-center gap-3">
-                  <img
-                    src={avatarUrl(c.login)}
-                    alt=""
-                    className="size-5 shrink-0 rounded-full"
-                    loading="lazy"
-                  />
-                  <Link
-                    to={`/contributors/${c.login}`}
-                    className="w-32 shrink-0 truncate font-semibold text-blue-600 hover:underline dark:text-blue-400"
-                  >
-                    {c.login}
-                  </Link>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-[var(--chart-1)]"
-                      style={{ width: `${(c.merged / maxMerged) * 100}%` }}
-                    />
-                  </div>
-                  <span className="flex w-28 shrink-0 items-center justify-end gap-1.5 text-xs tabular-nums text-muted-foreground">
-                    {comma(c.merged)} merged
-                    {c.currentStreak >= 2 && (
-                      <span
-                        className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400"
-                        title={`${c.currentStreak} week shipping streak`}
-                      >
-                        <Flame className="size-3" />
-                        {c.currentStreak}w
-                      </span>
-                    )}
-                    {c.isBot && <Badge variant="secondary">bot</Badge>}
-                  </span>
-                </div>
+                <ContributorBar key={c.login} contributor={c} maxMerged={maxMerged} />
               ))}
             </div>
           </CardContent>

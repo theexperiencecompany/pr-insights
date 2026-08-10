@@ -94,18 +94,21 @@ type graphQLResponse struct {
 	} `json:"extensions"`
 }
 
-// Syncer fetches org repos + all pull requests from the GitHub API.
+// Syncer fetches the configured repository's pulls + workflow runs from the
+// GitHub API.
 type Syncer struct {
 	org    string
+	repo   string
 	token  string
 	store  *State
 	client *http.Client
 	mu     sync.Mutex
 }
 
-func NewSyncer(org, token string, store *State) *Syncer {
+func NewSyncer(org, repo, token string, store *State) *Syncer {
 	return &Syncer{
 		org:   org,
+		repo:  repo,
 		token: token,
 		store: store,
 		client: &http.Client{
@@ -156,6 +159,20 @@ func (s *Syncer) syncOnce() {
 		s.store.setError(err)
 		return
 	}
+
+	// The platform is scoped to a single repository (GITHUB_REPO); sync only it.
+	scoped := make([]RepoInfo, 0, 1)
+	for _, r := range repos {
+		if r.Name == s.repo {
+			scoped = append(scoped, r)
+			break
+		}
+	}
+	if len(scoped) == 0 {
+		scoped = append(scoped, RepoInfo{Name: s.repo})
+		slog.Warn("configured repo not in org listing; syncing by name", "repo", s.repo)
+	}
+	repos = scoped
 
 	// Previous data per repo is kept when a repo fails this sync, so a
 	// transient error never degrades the dashboard (a banner flags it).

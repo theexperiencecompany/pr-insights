@@ -109,6 +109,7 @@ export interface WorkflowStat {
 
 export interface Status {
   org: string
+  repo: string
   syncing: boolean
   syncedAt: string
   lastError: string
@@ -172,6 +173,7 @@ export interface ContributorDetail {
 
 export interface ShameData {
   longestOpen: { pull: Pull; value: number }[]
+  longestToMerge: { pull: Pull; value: number }[]
   biggestClosed: { pull: Pull; value: number }[]
 }
 
@@ -210,7 +212,8 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 }
 
 export const getStatus = (): Promise<Status> => fetch('/api/status', { cache: 'no-store' }).then(json<Status>)
-export const getOverview = (): Promise<OverviewData> => fetch('/api/overview').then(json<OverviewData>)
+export const getOverview = (params: { largest?: number } = {}): Promise<OverviewData> =>
+  fetch(`/api/overview${qs(params)}`).then(json<OverviewData>)
 export const getContributors = (): Promise<ContributorsData> => fetch('/api/contributors').then(json<ContributorsData>)
 export const getContributor = (login: string): Promise<ContributorDetail> =>
   fetch(`/api/contributor${qs({ login })}`).then(json<ContributorDetail>)

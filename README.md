@@ -50,6 +50,7 @@ GITHUB_TOKEN=github_pat_xxx PR_INSIGHTS_ADDR=127.0.0.1:8787 ./pr-insights
 |---|---|---|
 | `GITHUB_TOKEN` | — (required) | GitHub token with `repo` read scope for the org |
 | `GITHUB_ORG` | `theexperiencecompany` | Organisation to analyse |
+| `GITHUB_REPO` | `gaia` | The single repository the whole platform is scoped to |
 | `PR_INSIGHTS_ADDR` | `127.0.0.1:8787` | Listen address |
 | `PR_INSIGHTS_DATA_DIR` | `./data` | Snapshot location |
 | `PR_INSIGHTS_SYNC_INTERVAL` | `6h` | Auto-refresh interval |

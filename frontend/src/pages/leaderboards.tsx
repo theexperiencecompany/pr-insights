@@ -1,8 +1,14 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, Download, Loader2 } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 
-import { avatarUrl, getContributors, type Pager as PagerData, type Pull, type RankedPull, type RepoInfo } from '@/lib/api'
+import {
+  avatarUrl,
+  getContributors,
+  getLeaderboards,
+  getShame,
+  type RankedPull,
+} from '@/lib/api'
 import { comma, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
@@ -61,82 +67,59 @@ const STATES: { value: string; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-interface LeaderboardResponse {
-  metric: string
-  state: string
-  order: string
-  rows: RankedPull[]
-  pager: PagerData
-  repoOptions: RepoInfo[]
-}
-
-interface ShameEntry {
-  pull: Pull
-  value: number
-}
-
-interface ShameResponse {
-  longestOpen: ShameEntry[]
-  biggestClosed: ShameEntry[]
-}
-
-async function getJSON<T>(path: string): Promise<T> {
-  let res: Response
-  try {
-    res = await fetch(path)
-  } catch {
-    throw new Error('Network error — is the server reachable?')
-  }
-  if (!res.ok) {
-    let detail = res.statusText
-    try {
-      const body = await res.json()
-      if (body && typeof body.error === 'string') detail = body.error
-    } catch {
-      // non-JSON error body; keep status text
-    }
-    throw new Error(`${res.status} ${detail}`.trim())
-  }
-  return res.json() as Promise<T>
-}
-
-async function fetchLeaderboards(params: {
-  metric: string
-  state: string
-  order?: string
-  page?: number
-  repo?: string
-  author?: string
-  from?: string
-  to?: string
-}): Promise<LeaderboardResponse> {
-  const q = new URLSearchParams()
-  if (params.metric) q.set('metric', params.metric)
-  if (params.state) q.set('state', params.state)
-  if (params.order) q.set('order', params.order)
-  if (params.page !== undefined) q.set('page', String(params.page))
-  if (params.repo) q.set('repo', params.repo)
-  if (params.author) q.set('author', params.author)
-  if (params.from) q.set('from', params.from)
-  if (params.to) q.set('to', params.to)
-  const qs = q.toString()
-  return getJSON<LeaderboardResponse>(`/api/leaderboards${qs ? `?${qs}` : ''}`)
-}
-
-function getShame(): Promise<ShameResponse> {
-  return getJSON<ShameResponse>('/api/shame')
-}
-
 function formatValue(metric: Metric, value: number): string {
   switch (metric) {
-    case 'timemerge':
-      return `${comma(Math.round(value))}h`
+    case 'timemerge': {
+      const days = value / 24
+      if (days >= 10) return `${Math.round(days)}d`
+      if (days >= 1) return `${days.toFixed(1)}d`
+      return `${Math.round(value)}h`
+    }
     case 'ageclose':
       return `${Math.round(value)}d`
     case 'commitsperfile':
       return value.toFixed(1)
     default:
       return comma(value)
+  }
+}
+
+// metricCol describes how the active metric is shown as its own table column.
+function metricCol(metric: Metric): { label: string; cell: (r: RankedPull) => ReactNode } {
+  switch (metric) {
+    case 'additions':
+      return {
+        label: 'Additions',
+        cell: (r) => (
+          <span className="font-mono text-green-600 dark:text-green-400">
+            +{comma(r.pull.additions)}
+          </span>
+        ),
+      }
+    case 'deletions':
+      return {
+        label: 'Deletions',
+        cell: (r) => (
+          <span className="font-mono text-red-600 dark:text-red-400">
+            −{comma(r.pull.deletions)}
+          </span>
+        ),
+      }
+    case 'files':
+      return { label: 'Files changed', cell: (r) => comma(r.pull.changedFiles) }
+    case 'commits':
+      return { label: 'Commits', cell: (r) => comma(r.pull.commits) }
+    case 'timemerge':
+      return { label: 'Time to merge', cell: (r) => formatValue('timemerge', r.value) }
+    case 'commitsperfile':
+      return { label: 'Commits / file', cell: (r) => formatValue('commitsperfile', r.value) }
+    case 'ageclose':
+      return { label: 'Age when closed', cell: (r) => formatValue('ageclose', r.value) }
+    default:
+      return {
+        label: 'Total lines',
+        cell: (r) => <span className="font-semibold">{comma(r.value)}</span>,
+      }
   }
 }
 
@@ -156,7 +139,6 @@ export default function LeaderboardsPage() {
   const stateParam = searchParams.get('state') ?? 'merged'
   const state = STATES.some((s) => s.value === stateParam) ? stateParam : 'merged'
   const order = searchParams.get('order') === 'asc' ? 'asc' : 'desc'
-  const repoParam = searchParams.get('repo') ?? 'all'
   const authorParam = searchParams.get('author') ?? 'all'
   const fromParam = searchParams.get('from') ?? ''
   const toParam = searchParams.get('to') ?? ''
@@ -167,17 +149,16 @@ export default function LeaderboardsPage() {
 
   const { data, loading, error } = useApi(
     () =>
-      fetchLeaderboards({
+      getLeaderboards({
         metric,
         state,
         order,
         page,
-        repo: repoParam === 'all' ? undefined : repoParam,
         author: authorParam === 'all' ? undefined : authorParam,
         from: fromParam || undefined,
         to: toParam || undefined,
       }),
-    [metric, state, order, repoParam, authorParam, fromParam, toParam, page],
+    [metric, state, order, authorParam, fromParam, toParam, page],
   )
 
   const { data: contributors } = useApi(getContributors)
@@ -200,10 +181,6 @@ export default function LeaderboardsPage() {
 
   const handleStateChange = (value: string) => {
     updateParams({ state: value, page: null })
-  }
-
-  const handleRepoChange = (value: string) => {
-    updateParams({ repo: value === 'all' ? null : value, page: null })
   }
 
   const handleAuthorChange = (value: string) => {
@@ -233,12 +210,11 @@ export default function LeaderboardsPage() {
     try {
       const rows: RankedPull[] = []
       for (let p = 1; p <= data.pager.pages; p++) {
-        const res = await fetchLeaderboards({
+        const res = await getLeaderboards({
           metric,
           state,
           order,
           page: p,
-          repo: repoParam === 'all' ? undefined : repoParam,
           author: authorParam === 'all' ? undefined : authorParam,
           from: fromParam || undefined,
           to: toParam || undefined,
@@ -330,19 +306,6 @@ export default function LeaderboardsPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={repoParam} onValueChange={handleRepoChange}>
-          <SelectTrigger aria-label="Filter by repository" className="max-w-56">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All repositories</SelectItem>
-            {data?.repoOptions.map((repo) => (
-              <SelectItem key={repo.name} value={repo.name}>
-                {repo.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Select value={authorParam} onValueChange={handleAuthorChange}>
           <SelectTrigger aria-label="Filter by author" className="max-w-44">
             <SelectValue />
@@ -418,11 +381,13 @@ export default function LeaderboardsPage() {
                   <TableHead className="w-14">Rank</TableHead>
                   <TableHead>Pull request</TableHead>
                   <TableHead>Author</TableHead>
-                  <TableHead className="text-right">Additions</TableHead>
-                  <TableHead className="text-right">Deletions</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Files</TableHead>
-                  <TableHead className="text-right">Commits</TableHead>
+                  {metric !== 'additions' && (
+                    <TableHead className="text-right">Additions</TableHead>
+                  )}
+                  {metric !== 'deletions' && <TableHead className="text-right">Deletions</TableHead>}
+                  <TableHead className="text-right">{metricCol(metric).label}</TableHead>
+                  {metric !== 'files' && <TableHead className="text-right">Files</TableHead>}
+                  {metric !== 'commits' && <TableHead className="text-right">Commits</TableHead>}
                   <TableHead className="text-right">Merged</TableHead>
                 </TableRow>
               </TableHeader>
@@ -464,21 +429,29 @@ export default function LeaderboardsPage() {
                           </a>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
-                        +{comma(row.pull.additions)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-red-600 tabular-nums dark:text-red-400">
-                        −{comma(row.pull.deletions)}
-                      </TableCell>
+                      {metric !== 'additions' && (
+                        <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
+                          +{comma(row.pull.additions)}
+                        </TableCell>
+                      )}
+                      {metric !== 'deletions' && (
+                        <TableCell className="text-right font-mono text-red-600 tabular-nums dark:text-red-400">
+                          −{comma(row.pull.deletions)}
+                        </TableCell>
+                      )}
                       <TableCell className="text-right font-semibold tabular-nums">
-                        {formatValue(metric, row.value)}
+                        {metricCol(metric).cell(row)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {comma(row.pull.changedFiles)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {comma(row.pull.commits)}
-                      </TableCell>
+                      {metric !== 'files' && (
+                        <TableCell className="text-right tabular-nums">
+                          {comma(row.pull.changedFiles)}
+                        </TableCell>
+                      )}
+                      {metric !== 'commits' && (
+                        <TableCell className="text-right tabular-nums">
+                          {comma(row.pull.commits)}
+                        </TableCell>
+                      )}
                       <TableCell className="whitespace-nowrap text-right text-muted-foreground">
                         {formatDate(row.pull.mergedAt)}
                       </TableCell>
@@ -492,7 +465,7 @@ export default function LeaderboardsPage() {
         )}
       </Card>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2">
+      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Card size="sm">
           <CardHeader>
             <CardTitle>Longest open</CardTitle>
@@ -505,6 +478,41 @@ export default function LeaderboardsPage() {
             <EmptyState text="No pull requests." />
           ) : (
             shame.longestOpen.map((entry) => (
+              <div
+                key={`${entry.pull.repo}#${entry.pull.number}`}
+                className="flex items-center gap-2 border-t px-3 py-2.5 hover:bg-muted/50"
+              >
+                <StateIcon state={entry.pull.state} isDraft={entry.pull.isDraft} />
+                <a
+                  href={entry.pull.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate font-medium hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                >
+                  {entry.pull.title}
+                </a>
+                <span className="shrink-0 text-muted-foreground">
+                  · {entry.pull.repo}#{entry.pull.number}
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {entry.value.toFixed(0)}d
+                </span>
+              </div>
+            ))
+          )}
+        </Card>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Longest to merge</CardTitle>
+          </CardHeader>
+          {shameLoading ? (
+            <Loading />
+          ) : shameError ? (
+            <EmptyState text={shameError} />
+          ) : !shame || shame.longestToMerge.length === 0 ? (
+            <EmptyState text="No pull requests." />
+          ) : (
+            shame.longestToMerge.map((entry) => (
               <div
                 key={`${entry.pull.repo}#${entry.pull.number}`}
                 className="flex items-center gap-2 border-t px-3 py-2.5 hover:bg-muted/50"

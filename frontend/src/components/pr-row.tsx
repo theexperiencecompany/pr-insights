@@ -1,9 +1,10 @@
 import { avatarUrl, type Pull } from '@/lib/api'
 import { comma, timeAgo } from '@/lib/format'
+import type { ReactNode } from 'react'
 
 import { StateIcon } from './state-icon'
 
-export function PrRow({ pull }: { pull: Pull }) {
+export function PrRow({ pull, extras }: { pull: Pull; extras?: ReactNode }) {
   const relative =
     pull.state === 'MERGED' && pull.mergedAt
       ? `merged ${timeAgo(pull.mergedAt)}`
@@ -50,6 +51,7 @@ export function PrRow({ pull }: { pull: Pull }) {
           <span>{pull.commits} commits</span>
           <span>·</span>
           <span>{pull.changedFiles} files</span>
+          {extras}
         </div>
       </div>
       <div className="shrink-0 text-sm font-mono tabular-nums">

@@ -1,4 +1,5 @@
-import { Flame, TrendingDown, TrendingUp } from 'lucide-react'
+import { TrendingDown, TrendingUp } from 'lucide-react'
+import { useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -9,10 +10,11 @@ import {
   YAxis,
 } from 'recharts'
 
+import { ContributorBar } from '@/components/contributor-bar'
 import { EmptyState } from '@/components/empty-state'
 import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
-import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   ChartContainer,
@@ -231,7 +233,11 @@ function WhenWeShip({ data }: { data: OverviewData }) {
 function OverviewContent({ data }: { data: OverviewData }) {
   const top = data.topContributors.slice(0, 10)
   const maxMerged = Math.max(1, ...top.map((c) => c.merged))
-  const largest = data.largest.slice(0, 5)
+  const [hideReleases, setHideReleases] = useState(true)
+  const largest = (hideReleases
+    ? data.largest.filter(({ pull }) => !/release/i.test(pull.title))
+    : data.largest
+  ).slice(0, 5)
 
   return (
     <div className="flex flex-col gap-4">
@@ -315,49 +321,23 @@ function OverviewContent({ data }: { data: OverviewData }) {
           <CardContent>
             <div className="flex flex-col gap-1.5">
               {top.map((c) => (
-                <div key={c.login} className="flex items-center gap-3">
-                  <img
-                    src={avatarUrl(c.login)}
-                    alt=""
-                    className="size-5 shrink-0 rounded-full"
-                    loading="lazy"
-                  />
-                  <a
-                    href={`https://github.com/${c.login}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-32 shrink-0 truncate font-semibold text-blue-600 hover:underline dark:text-blue-400"
-                  >
-                    {c.login}
-                  </a>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-[var(--chart-1)]"
-                      style={{ width: `${(c.merged / maxMerged) * 100}%` }}
-                    />
-                  </div>
-                  <span className="flex w-24 shrink-0 items-center justify-end gap-1.5 text-xs tabular-nums text-muted-foreground">
-                    {comma(c.merged)} merged
-                    {c.currentStreak >= 2 && (
-                      <span
-                        className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400"
-                        title={`${c.currentStreak} week shipping streak`}
-                      >
-                        <Flame className="size-3" />
-                        {c.currentStreak}w
-                      </span>
-                    )}
-                    {c.isBot && <Badge variant="secondary">bot</Badge>}
-                  </span>
-                </div>
+                <ContributorBar key={c.login} contributor={c} maxMerged={maxMerged} />
               ))}
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex-row items-center justify-between">
             <SectionTitle>Largest pull requests</SectionTitle>
+            <Button
+              variant={hideReleases ? 'secondary' : 'outline'}
+              size="sm"
+              onClick={() => setHideReleases((h) => !h)}
+              aria-pressed={hideReleases}
+            >
+              {hideReleases ? 'Release PRs hidden' : 'Showing release PRs'}
+            </Button>
           </CardHeader>
           <Table>
             <TableHeader>
@@ -416,7 +396,7 @@ function OverviewContent({ data }: { data: OverviewData }) {
 }
 
 export default function OverviewPage() {
-  const { data, loading, error, refetch } = useApi(getOverview, [])
+  const { data, loading, error, refetch } = useApi(() => getOverview({ largest: 15 }), [])
 
   if (loading) return <Loading />
   if (error) {

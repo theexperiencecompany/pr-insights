@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
+import { ArrowDown, ArrowUp, CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
 import { Loading } from '@/components/loading'
@@ -238,6 +238,38 @@ function SectionHeading({ children }: { children: ReactNode }) {
   return <h2 className="mt-6 text-base font-semibold">{children}</h2>
 }
 
+// SortableHead is a click-to-sort table header with an arrow indicator.
+function SortableHead({
+  label,
+  k,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string
+  k: string
+  sort: { key: string; dir: 'asc' | 'desc' }
+  onSort: (key: string) => void
+  className?: string
+}) {
+  const active = sort.key === k
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={cn(
+          'inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground',
+          active && 'text-foreground',
+        )}
+      >
+        {label}
+        {active ? (sort.dir === 'desc' ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />) : null}
+      </button>
+    </TableHead>
+  )
+}
+
 function ChartCard({
   title,
   children,
@@ -260,16 +292,12 @@ function ChartCard({
 export default function InsightsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const repo = searchParams.get('repo') ?? ''
   const rawPeriod = searchParams.get('period')
   const period: Period = PERIODS.includes(rawPeriod as Period) ? (rawPeriod as Period) : '6m'
   const rawGran = searchParams.get('gran')
   const gran: Gran = GRANS.includes(rawGran as Gran) ? (rawGran as Gran) : 'month'
 
-  const { data, loading, error } = useApi(
-    () => getInsights({ repo: repo || undefined, period, gran }),
-    [repo, period, gran],
-  )
+  const { data, loading, error } = useApi(() => getInsights({ period, gran }), [period, gran])
   const { data: status } = useApi(getStatus)
 
   const [hidden, setHidden] = useState<Record<string, boolean>>({})
@@ -280,12 +308,6 @@ export default function InsightsPage() {
     else next.delete(key)
     setSearchParams(next)
   }
-
-  const repoOptions = useMemo(() => {
-    const names = new Set((data?.repoOptions ?? []).map((r) => r.name))
-    if (repo && !names.has(repo)) names.add(repo)
-    return Array.from(names)
-  }, [data, repo])
 
   const linesData = useMemo(
     () => data?.ship.map((b) => ({ label: b.label, lines: b.additions + b.deletions })) ?? [],
@@ -312,7 +334,7 @@ export default function InsightsPage() {
         rows[i].prev = b.merged
       })
     }
-    // least-squares forecast over merged
+    // least-squares forecast over merged, anchored to the last real point
     const ys = rows.map((r) => r.merged ?? 0)
     const n = ys.length
     if (n >= 4) {
@@ -326,6 +348,8 @@ export default function InsightsPage() {
       })
       const slope = den > 0 ? num / den : 0
       const intercept = meanY - slope * meanX
+      // anchor: the forecast line starts exactly where the data ends
+      rows[n - 1].forecast = rows[n - 1].merged
       for (let k = 1; k <= 3; k++) {
         const x = n - 1 + k
         rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: Math.max(0, slope * x + intercept) })
@@ -352,7 +376,38 @@ export default function InsightsPage() {
   )
 
   const [showAllWorkflows, setShowAllWorkflows] = useState(false)
-  const visibleWorkflows = data?.workflows.slice(0, showAllWorkflows ? undefined : 8) ?? []
+  const [wfSort, setWfSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({
+    key: 'runs',
+    dir: 'desc',
+  })
+
+  const handleWfSort = (key: string) => {
+    setWfSort((s) => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }))
+  }
+
+  const sortedWorkflows = useMemo(() => {
+    const rows = [...(data?.workflows ?? [])]
+    const dir = wfSort.dir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      switch (wfSort.key) {
+        case 'workflow':
+          return dir * a.workflow.localeCompare(b.workflow)
+        case 'successRate':
+          return dir * (a.successRate - b.successRate)
+        case 'median':
+          return dir * (a.medianDurationMin - b.medianDurationMin)
+        case 'longest':
+          return dir * (a.longestDurationMin - b.longestDurationMin)
+        case 'lastRun':
+          return dir * (a.lastRunAt ?? '').localeCompare(b.lastRunAt ?? '')
+        default:
+          return dir * (a.runs - b.runs)
+      }
+    })
+    return rows
+  }, [data, wfSort])
+
+  const visibleWorkflows = sortedWorkflows.slice(0, showAllWorkflows ? undefined : 8)
 
   const toggleSeries = (key: string) => setHidden((h) => ({ ...h, [key]: !h[key] }))
 
@@ -363,21 +418,6 @@ export default function InsightsPage() {
       <PageHeader title="Insights" description="Ship velocity and CI health" />
 
       <div className="mb-6 flex flex-wrap items-center gap-x-5 gap-y-3">
-        <Filter label="Repository">
-          <Select value={repo} onValueChange={(v) => updateParam('repo', v)}>
-            <SelectTrigger size="sm" className="min-w-44">
-              <SelectValue placeholder="All repositories" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">All repositories</SelectItem>
-              {repoOptions.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Filter>
         <Filter label="Period">
           <Select value={period} onValueChange={(v) => updateParam('period', v)}>
             <SelectTrigger size="sm" className="min-w-36">
@@ -442,6 +482,7 @@ export default function InsightsPage() {
                       {mergedData.some((r) => r.prev !== null) && (
                         <Line
                           type="monotone"
+                          isAnimationActive={false}
                           dataKey="prev"
                           name="Last year"
                           stroke="var(--chart-5)"
@@ -461,16 +502,17 @@ export default function InsightsPage() {
                       />
                       <Line
                         type="monotone"
+                        isAnimationActive={false}
                         dataKey="ma"
                         name="Moving average"
                         stroke="var(--chart-5)"
                         strokeWidth={1.5}
-                        strokeDasharray="4 4"
                         dot={false}
                         activeDot={false}
                       />
                       <Line
                         type="monotone"
+                        isAnimationActive={false}
                         dataKey="forecast"
                         name="Forecast"
                         stroke="var(--chart-1)"
@@ -540,6 +582,7 @@ export default function InsightsPage() {
                       <ChartTooltip content={<CycleTip />} />
                       <Line
                         type="monotone"
+                        isAnimationActive={false}
                         dataKey="cycle"
                         stroke="var(--color-cycle)"
                         strokeWidth={2}
@@ -682,6 +725,7 @@ export default function InsightsPage() {
                       <ChartTooltip content={<RateTip />} />
                       <Line
                         type="monotone"
+                        isAnimationActive={false}
                         dataKey="rate"
                         stroke="var(--color-rate)"
                         strokeWidth={2}
@@ -747,6 +791,7 @@ export default function InsightsPage() {
                       <ChartTooltip content={<DurationTip />} />
                       <Line
                         type="monotone"
+                        isAnimationActive={false}
                         dataKey="duration"
                         stroke="var(--color-duration)"
                         strokeWidth={2}
@@ -764,12 +809,12 @@ export default function InsightsPage() {
                     <TableRow>
                       <TableHead>Workflow</TableHead>
                       <TableHead>Repository</TableHead>
-                      <TableHead className="text-right">Runs</TableHead>
-                      <TableHead className="text-right">Success rate</TableHead>
+                      <SortableHead label="Runs" k="runs" sort={wfSort} onSort={handleWfSort} className="text-right" />
+                      <SortableHead label="Success rate" k="successRate" sort={wfSort} onSort={handleWfSort} className="text-right" />
                       <TableHead>Trend (6 mo)</TableHead>
-                      <TableHead className="text-right">Median</TableHead>
-                      <TableHead className="text-right">Longest</TableHead>
-                      <TableHead className="text-right">Last run</TableHead>
+                      <SortableHead label="Median" k="median" sort={wfSort} onSort={handleWfSort} className="text-right" />
+                      <SortableHead label="Longest" k="longest" sort={wfSort} onSort={handleWfSort} className="text-right" />
+                      <SortableHead label="Last run" k="lastRun" sort={wfSort} onSort={handleWfSort} className="text-right" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>

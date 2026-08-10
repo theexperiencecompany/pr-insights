@@ -66,7 +66,7 @@ type insightsStats struct {
 
 // ---- builders (shared with the HTML handlers until they are removed) ----
 
-func computeOverview(snap Data) apiOverview {
+func computeOverview(snap Data, largestN int) apiOverview {
 	open, merged, closed := CountState(snap.Pulls)
 	contribs := Contributors(snap.Pulls)
 	monthly := MonthlySeries(snap.Pulls)
@@ -88,8 +88,8 @@ func computeOverview(snap Data) apiOverview {
 	}
 
 	largest := Rank(PullsByState(snap.Pulls, "MERGED"), MetricDiff, false)
-	if len(largest) > 5 {
-		largest = largest[:5]
+	if len(largest) > largestN {
+		largest = largest[:largestN]
 	}
 
 	top := contribs
@@ -184,10 +184,12 @@ func repoOptionsWithPulls(snap Data) []RepoInfo {
 	return out
 }
 
-// ShameList is the "hall of shame": oldest open PRs and biggest closed ones.
+// ShameList is the "hall of shame": oldest open PRs, slowest merges and the
+// biggest closed-without-merge ones.
 type ShameList struct {
-	LongestOpen   []ShameEntry `json:"longestOpen"`
-	BiggestClosed []ShameEntry `json:"biggestClosed"`
+	LongestOpen    []ShameEntry `json:"longestOpen"`    // days open
+	LongestToMerge []ShameEntry `json:"longestToMerge"` // days from open to merge
+	BiggestClosed  []ShameEntry `json:"biggestClosed"`  // total lines
 }
 
 // ShameEntry is one hall-of-shame row with a human-readable value.
@@ -212,6 +214,31 @@ func computeShame(snap Data) ShameList {
 		longest = append(longest, ShameEntry{Pull: p, Value: time.Since(p.CreatedAt).Hours() / 24})
 	}
 
+	merged := PullsByState(snap.Pulls, "MERGED")
+	sort.Slice(merged, func(i, j int) bool {
+		di, dj := 0.0, 0.0
+		if merged[i].MergedAt != nil {
+			di = merged[i].MergedAt.Sub(merged[i].CreatedAt).Hours()
+		}
+		if merged[j].MergedAt != nil {
+			dj = merged[j].MergedAt.Sub(merged[j].CreatedAt).Hours()
+		}
+		if di != dj {
+			return di > dj
+		}
+		return merged[i].Number > merged[j].Number
+	})
+	slowest := make([]ShameEntry, 0, 5)
+	for _, p := range merged {
+		if len(slowest) == 5 {
+			break
+		}
+		if p.MergedAt == nil {
+			continue
+		}
+		slowest = append(slowest, ShameEntry{Pull: p, Value: p.MergedAt.Sub(p.CreatedAt).Hours() / 24})
+	}
+
 	closed := PullsByState(snap.Pulls, "CLOSED")
 	sort.Slice(closed, func(i, j int) bool {
 		di := closed[i].Additions + closed[i].Deletions
@@ -228,7 +255,7 @@ func computeShame(snap Data) ShameList {
 		}
 		biggest = append(biggest, ShameEntry{Pull: p, Value: float64(p.Additions + p.Deletions)})
 	}
-	return ShameList{LongestOpen: longest, BiggestClosed: biggest}
+	return ShameList{LongestOpen: longest, LongestToMerge: slowest, BiggestClosed: biggest}
 }
 
 func computeInsights(snap Data, repo, period string, gran Granularity) apiInsights {
@@ -294,7 +321,11 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, computeOverview(s.store.Snapshot()))
+	largestN := queryInt(r, "largest", 5)
+	if largestN < 1 || largestN > 50 {
+		largestN = 5
+	}
+	writeJSON(w, computeOverview(s.store.Snapshot(), largestN))
 }
 
 func (s *Server) handleAPILeaderboards(w http.ResponseWriter, r *http.Request) {
