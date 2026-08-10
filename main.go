@@ -10,11 +10,8 @@ import (
 	"time"
 )
 
-//go:embed web/static/*
-var staticFS embed.FS
-
-//go:embed web/templates/*
-var templateFS embed.FS
+//go:embed all:frontend/dist
+var webFS embed.FS
 
 type Config struct {
 	Org          string
@@ -55,7 +52,7 @@ func main() {
 
 	syncer := NewSyncer(cfg.Org, token, store)
 
-	srv, err := NewServer(store, syncer, templateFS, staticFS)
+	srv, err := NewServer(store, syncer, webFS)
 	if err != nil {
 		slog.Error("failed to initialise server", "err", err)
 		os.Exit(1)

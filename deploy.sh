@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Deploy pr-insights to a remote host over SSH.
 #   ./deploy.sh <host> [binary]
+# Builds the frontend first (frontend/dist is embedded in the Go binary).
 # The GitHub token is taken from GITHUB_TOKEN, falling back to `gh auth token`.
 set -euo pipefail
 
@@ -9,6 +10,10 @@ BIN="${2:-./pr-insights}"
 SRV=pr-insights
 REMOTE_DIR=/opt/pr-insights
 ENV_FILE=/etc/pr-insights.env
+
+echo "==> building frontend (frontend/dist)"
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend build
 
 if [[ ! -f "$BIN" ]]; then
   echo "binary not found: $BIN (build it first: go build -o pr-insights .)" >&2

@@ -51,6 +51,9 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
     devDependencies:
+      '@oxlint/binding-darwin-arm64':
+        specifier: 1.78.0
+        version: 1.78.0
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
@@ -284,6 +287,12 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     cpu: [arm64]
     os: [android]
+
+  '@oxlint/binding-darwin-arm64@1.78.0':
+    resolution: {integrity: sha512-2Y2U9Ahrz+OO0Ej88f9SJYq51/jUBp1Mc7iZu0ukrbeeZ3gpRGfzIFnoqfHDY96xr0GEfNrPUBFEy0nN5aD7HA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    cpu: [arm64]
+    os: [darwin]
 
   '@oxlint/binding-darwin-x64@1.78.0':
     resolution: {integrity: sha512-rpych6eJq6m9jDRypTEaPD1xysaEW5h9+xuxhGK/QhOg+/xaqPZrCrTNoIl/f3nEjuJeCEmstNDlrE9rJi/3/g==}
@@ -3156,6 +3165,8 @@ snapshots:
   '@oxlint/binding-android-arm64@1.78.0':
     optional: true
 
+  '@oxlint/binding-darwin-arm64@1.78.0': {}
+
   '@oxlint/binding-darwin-x64@1.78.0':
     optional: true
 
@@ -4951,6 +4962,7 @@ snapshots:
     optionalDependencies:
       '@oxlint/binding-android-arm-eabi': 1.78.0
       '@oxlint/binding-android-arm64': 1.78.0
+      '@oxlint/binding-darwin-arm64': 1.78.0
       '@oxlint/binding-darwin-x64': 1.78.0
       '@oxlint/binding-freebsd-x64': 1.78.0
       '@oxlint/binding-linux-arm-gnueabihf': 1.78.0

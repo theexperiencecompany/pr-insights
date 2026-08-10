@@ -2,15 +2,16 @@
 
 Pull request analytics for the `theexperiencecompany` GitHub organisation:
 leaderboards (largest PRs by total lines, additions, deletions, files changed,
-commits), contributor and repository rankings, and minimal charts (merged PRs
-by month, lines changed by month, top contributors) — rendered in GitHub's
-Primer design language, light and dark.
+commits), contributor and repository rankings, shipping velocity and CI charts
+— rendered in GitHub's Primer design language, light and dark.
 
-- **Language**: Go, standard library only (net/http, html/template, embed).
-  Ships as a single static binary with no runtime dependencies.
-- **Data**: GitHub GraphQL v4, fetched per repo in parallel (5 workers),
-  persisted as a JSON snapshot. Refreshes on start (if stale) and every 6h;
-  a "Sync" button in the header forces a refresh.
+- **Backend**: Go, standard library only (net/http, encoding/json, embed).
+  Syncs via GitHub GraphQL v4 + REST (parallel workers, incremental CI runs),
+  persists a JSON snapshot, serves the analytics as a JSON API and the built
+  frontend as a single static binary.
+- **Frontend**: Vite + React + TypeScript + Tailwind v4 + shadcn/ui + shadcn
+  charts (Recharts) in `frontend/` — interactive charts with tooltips, hovers
+  and legends.
 - **UI**: Primer design tokens (from `@primer/primitives`) — same fonts,
   colours, boxes, tabs, tables, labels and pagination as GitHub itself.
 
@@ -24,13 +25,19 @@ Primer design language, light and dark.
 | `/repos` | Per-repository aggregates |
 | `/insights` | Shipping velocity (merged PRs, lines merged, cycle time) + CI health (runs, success rate, duration, workflow breakdown) — filterable by repository, period (3m/6m/12m/all) and granularity (weekly/monthly) |
 | `/pulls` | Full PR list with state/repo/search filters and pagination |
-| `/api/status` | Sync status as JSON |
-| `POST /api/sync` | Trigger a refresh |
+
+## API
+
+The frontend consumes JSON endpoints: `/api/overview`, `/api/leaderboards`,
+`/api/contributors`, `/api/repos`, `/api/insights`, `/api/pulls`,
+`/api/status`, `POST /api/sync`. In dev, `pnpm dev` proxies `/api` to the Go
+server (default `127.0.0.1:8787`).
 
 ## Build
 
 ```bash
-go build -o pr-insights .
+pnpm --dir frontend install && pnpm --dir frontend build   # builds frontend/dist
+go build -o pr-insights .                                   # embeds frontend/dist
 ```
 
 ## Run
