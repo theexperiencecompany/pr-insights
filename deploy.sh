@@ -15,6 +15,9 @@ echo "==> building frontend (frontend/dist)"
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend build
 
+echo "==> building Go binary (embeds frontend/dist)"
+go build -o "$BIN" .
+
 if [[ ! -f "$BIN" ]]; then
   echo "binary not found: $BIN (build it first: go build -o pr-insights .)" >&2
   exit 1
