@@ -1,0 +1,71 @@
+{{define "leaderboards"}}
+{{template "docHead" .}}
+<div class="pagehead">
+  <h1 class="pagehead-title">Leaderboards</h1>
+  <p class="pagehead-desc">Largest pull requests across {{.Org}}, ranked by {{.Metric | metricLabel}} ({{.State | stateLabel}} only).</p>
+</div>
+
+<div class="tabnav" role="tablist" aria-label="Ranking metric">
+  {{range .Tabs}}
+  <a class="tabnav-item{{if .Active}} selected{{end}}" href="{{.Href}}" role="tab" aria-selected="{{.Active}}">{{.Label}}</a>
+  {{end}}
+</div>
+
+<form class="filterbar" method="get" action="/leaderboards">
+  <input type="hidden" name="metric" value="{{.Metric}}">
+  <label class="filter-label" for="state-filter">State</label>
+  <select class="select" id="state-filter" name="state" onchange="this.form.submit()">
+    <option value="merged"{{if eq .State "merged"}} selected{{end}}>Merged</option>
+    <option value="open"{{if eq .State "open"}} selected{{end}}>Open</option>
+    <option value="closed"{{if eq .State "closed"}} selected{{end}}>Closed</option>
+    <option value="all"{{if eq .State "all"}} selected{{end}}>All</option>
+  </select>
+</form>
+
+<div class="Box">
+  <table class="table">
+    <thead>
+      <tr>
+        <th class="rank-col">Rank</th>
+        <th>Pull request</th>
+        <th>Author</th>
+        <th class="num">Additions</th>
+        <th class="num">Deletions</th>
+        <th class="num">Total</th>
+        <th class="num">Files</th>
+        <th class="num">Commits</th>
+        <th>Merged</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $i, $row := .Rows}}
+      <tr>
+        <td class="rank-col{{if lt $i 3}} rank-top{{end}}">{{add $.Pager.From $i | add 1}}</td>
+        <td>
+          <a class="link" href="{{.Pull.URL}}" target="_blank" rel="noreferrer">{{.Pull.Title}}</a>
+          <span class="muted">· {{.Pull.Repo}}#{{.Pull.Number}}</span>
+        </td>
+        <td>
+          <span class="author-cell">
+            <img class="avatar" src="{{avatarURL .Pull.Author}}" width="20" height="20" alt="" referrerpolicy="no-referrer" loading="lazy">
+            <a class="link" href="{{authorURL .Pull.Author}}" target="_blank" rel="noreferrer">{{.Pull.Author}}</a>
+          </span>
+        </td>
+        <td class="num diff-add">+{{comma .Pull.Additions}}</td>
+        <td class="num diff-del">&minus;{{comma .Pull.Deletions}}</td>
+        <td class="num rank-value">{{comma .Value}}</td>
+        <td class="num">{{comma .Pull.ChangedFiles}}</td>
+        <td class="num">{{comma .Pull.Commits}}</td>
+        <td class="muted nowrap">{{date .Pull.MergedAt}}</td>
+      </tr>
+      {{end}}
+      {{if not .Rows}}
+      <tr><td colspan="9"><div class="empty-state">No pull requests match this filter.</div></td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+{{template "pager" .Pager}}
+{{template "docTail" .}}
+{{end}}

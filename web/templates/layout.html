@@ -1,0 +1,61 @@
+{{define "docHead"}}
+<!DOCTYPE html>
+<html lang="en" data-color-mode="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>PR Insights · {{.Org}}</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="{{.OrgAvatarURL}}">
+</head>
+<body{{if not .HasData}} data-autoreload="1"{{end}}>
+<header class="header">
+  <div class="header-inner">
+    <a class="header-logo" href="/">
+      <img class="header-avatar" src="{{.OrgAvatarURL}}" width="20" height="20" alt="" referrerpolicy="no-referrer">
+      <span class="header-title">PR Insights</span>
+    </a>
+    <nav class="header-nav">
+      <a class="header-nav-item{{if eq .Page "overview"}} current{{end}}" href="/">Overview</a>
+      <a class="header-nav-item{{if eq .Page "leaderboards"}} current{{end}}" href="/leaderboards">Leaderboards</a>
+      <a class="header-nav-item{{if eq .Page "contributors"}} current{{end}}" href="/contributors">Contributors <span class="counter">{{comma .ContributorCount}}</span></a>
+      <a class="header-nav-item{{if eq .Page "repos"}} current{{end}}" href="/repos">Repositories <span class="counter">{{comma .RepoCount}}</span></a>
+      <a class="header-nav-item{{if eq .Page "pulls"}} current{{end}}" href="/pulls">Pull requests <span class="counter">{{comma .OpenCount}}</span></a>
+    </nav>
+    <div class="header-right">
+      <span class="sync-status" id="sync-status">
+        <span class="sync-dot{{if .Syncing}} syncing{{else if .SyncError}} error{{else if gt .RepoErrorCount 0}} warn{{else if .SyncedAtISO}} ok{{end}}" id="sync-dot"></span>
+        <span id="sync-text" data-synced="{{.SyncedAtISO}}">{{if .Syncing}}Syncing{{else if .SyncError}}Sync failed{{else if .SyncedAtISO}}Updated{{else}}Waiting for first sync{{end}}</span>
+      </span>
+      <button class="btn btn-header btn-sm" id="sync-btn"{{if .Syncing}} disabled{{end}}>
+        {{icon "sync"}}<span id="sync-btn-label">Sync</span>
+      </button>
+      <button class="btn btn-header btn-sm btn-icon-only" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">
+        <span class="theme-icon theme-icon-dark">{{icon "moon"}}</span>
+        <span class="theme-icon theme-icon-light" hidden>{{icon "sun"}}</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+{{if .RepoErrorCount}}<div class="container banner banner-warn">Some repositories failed to sync — showing the last synced data for {{.RepoErrorCount}} of them.</div>{{end}}
+{{if .SyncError}}<div class="container banner banner-danger">Last sync failed: {{.SyncError}}.</div>{{end}}
+
+<main class="container">
+{{end}}
+
+{{define "docTail"}}
+</main>
+
+<footer class="footer">
+  <span>PR Insights</span>
+  <span aria-hidden="true">·</span>
+  <a href="https://github.com/{{.Org}}" target="_blank" rel="noreferrer">{{.Org}}</a>
+  <span aria-hidden="true">·</span>
+  <span class="muted">Built on GitHub's data, Primer design tokens.</span>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
+{{end}}

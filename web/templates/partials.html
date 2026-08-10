@@ -1,0 +1,38 @@
+{{define "prRow"}}
+<li class="pr-row">
+  <span class="pr-state {{stateClass .}}" aria-hidden="true">{{stateIcon .}}</span>
+  <div class="pr-main">
+    <a class="pr-title" href="{{.URL}}" target="_blank" rel="noreferrer">{{.Title}}</a>
+    <div class="pr-meta">
+      <span class="muted">#{{.Number}}</span>
+      <span class="meta-sep" aria-hidden="true">·</span>
+      <span class="pr-repo">{{.Repo}}</span>
+      <span class="meta-sep" aria-hidden="true">·</span>
+      <img class="avatar avatar-sm" src="{{avatarURL .Author}}" width="16" height="16" alt="" referrerpolicy="no-referrer" loading="lazy">
+      <a class="pr-author" href="{{authorURL .Author}}" target="_blank" rel="noreferrer">{{.Author}}</a>
+      {{if eq .State "MERGED"}}merged{{else if eq .State "OPEN"}}opened{{else}}closed{{end}}
+      <time datetime="{{stateTimestamp .}}" data-timestamp="{{stateTimestamp .}}">{{stateTime .}}</time>
+      <span class="meta-sep" aria-hidden="true">·</span>
+      <span>{{comma .Commits}} commits</span>
+      <span class="meta-sep" aria-hidden="true">·</span>
+      <span>{{comma .ChangedFiles}} files</span>
+    </div>
+  </div>
+  <span class="pr-diff">
+    <span class="diff-add">+{{comma .Additions}}</span>
+    <span class="diff-del">&minus;{{comma .Deletions}}</span>
+  </span>
+</li>
+{{end}}
+
+{{define "pager"}}
+{{if .Total}}
+<div class="pagination">
+  <span class="pagination-info">Showing {{add .From 1}}&ndash;{{comma .To}} of {{comma .Total}}</span>
+  <div class="pagination-buttons">
+    <a class="btn btn-sm{{if not .HasPrev}} disabled{{end}}" href="{{.PrevHref}}"{{if not .HasPrev}} aria-disabled="true" tabindex="-1"{{end}}>Previous</a>
+    <a class="btn btn-sm{{if not .HasNext}} disabled{{end}}" href="{{.NextHref}}"{{if not .HasNext}} aria-disabled="true" tabindex="-1"{{end}}>Next</a>
+  </div>
+</div>
+{{end}}
+{{end}}

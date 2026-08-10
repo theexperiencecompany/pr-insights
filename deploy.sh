@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Deploy pr-insights to a remote host over SSH.
+#   ./deploy.sh <host> [binary]
+# The GitHub token is taken from GITHUB_TOKEN, falling back to `gh auth token`.
+set -euo pipefail
+
+HOST="${1:?usage: deploy.sh <host> [binary]}"
+BIN="${2:-./pr-insights}"
+SRV=pr-insights
+REMOTE_DIR=/opt/pr-insights
+ENV_FILE=/etc/pr-insights.env
+
+if [[ ! -f "$BIN" ]]; then
+  echo "binary not found: $BIN (build it first: go build -o pr-insights .)" >&2
+  exit 1
+fi
+
+TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+if [[ -z "$TOKEN" ]]; then
+  echo "no GitHub token: set GITHUB_TOKEN or run gh auth login" >&2
+  exit 1
+fi
+
+echo "==> uploading binary to ${HOST}:${REMOTE_DIR}/"
+ssh "$HOST" "sudo mkdir -p ${REMOTE_DIR} && sudo chown root:root ${REMOTE_DIR}"
+scp -q "$BIN" "${HOST}:/tmp/pr-insights.new"
+ssh "$HOST" "sudo mv -f /tmp/pr-insights.new ${REMOTE_DIR}/pr-insights && sudo chmod 755 ${REMOTE_DIR}/pr-insights"
+
+echo "==> writing ${ENV_FILE}"
+ssh "$HOST" "printf 'GITHUB_TOKEN=%s\nGITHUB_ORG=theexperiencecompany\nPR_INSIGHTS_ADDR=127.0.0.1:8787\nPR_INSIGHTS_DATA_DIR=/var/lib/pr-insights\nPR_INSIGHTS_SYNC_INTERVAL=6h\n' '${TOKEN}' | sudo tee ${ENV_FILE} >/dev/null && sudo chown root:root ${ENV_FILE} && sudo chmod 600 ${ENV_FILE}"
+
+echo "==> installing systemd unit"
+scp -q systemd/pr-insights.service "${HOST}:/tmp/pr-insights.service"
+ssh "$HOST" "sudo mv -f /tmp/pr-insights.service /etc/systemd/system/pr-insights.service && sudo systemctl daemon-reload"
+
+echo "==> creating service user (if needed)"
+ssh "$HOST" "sudo id prinsights >/dev/null 2>&1 || sudo useradd --system --no-create-home --home-dir /opt/pr-insights --shell /usr/sbin/nologin prinsights"
+
+echo "==> starting service"
+ssh "$HOST" "sudo systemctl enable --now pr-insights && sleep 2 && sudo systemctl status pr-insights --no-pager | head -8"
+
+echo "==> smoke test"
+ssh "$HOST" "curl -sf http://127.0.0.1:8787/healthz && echo '  -> healthz ok'"
+
+echo "deploy complete"

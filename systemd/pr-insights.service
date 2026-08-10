@@ -1,0 +1,24 @@
+[Unit]
+Description=PR Insights — GitHub pull request analytics dashboard
+Documentation=https://github.com/theexperiencecompany/pr-insights
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prinsights
+Group=prinsights
+WorkingDirectory=/opt/pr-insights
+EnvironmentFile=/etc/pr-insights.env
+ExecStart=/opt/pr-insights/pr-insights
+Restart=always
+RestartSec=5
+StateDirectory=pr-insights
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pr-insights
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+.agents/
+data/
+pr-insights
+*.log
+.DS_Store
