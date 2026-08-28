@@ -33,6 +33,7 @@ type apiOverview struct {
 	SyncedAt        *time.Time       `json:"syncedAt,omitempty"`
 	LastError       string           `json:"lastError,omitempty"`
 	RepoErrorCount  int              `json:"repoErrorCount"`
+	Gran            string           `json:"gran"`
 	Stats           overviewStats    `json:"stats"`
 	Contributors    int              `json:"contributors"`
 	Monthly         []ShipBucket     `json:"monthly"`
@@ -66,10 +67,13 @@ type insightsStats struct {
 
 // ---- builders (shared with the HTML handlers until they are removed) ----
 
-func computeOverview(snap Data, largestN int) apiOverview {
+func computeOverview(snap Data, largestN int, gran Granularity) apiOverview {
 	open, merged, closed := CountState(snap.Pulls)
 	contribs := Contributors(snap.Pulls)
-	monthly := MonthlySeries(snap.Pulls)
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	monthly := ShippingSeries(snap.Pulls, "", gran, time.Time{})
 
 	var additions, deletions, files, commits int
 	for _, p := range snap.Pulls {
@@ -103,6 +107,7 @@ func computeOverview(snap Data, largestN int) apiOverview {
 		SyncedAt:       snap.SyncedAt,
 		LastError:      snap.LastError,
 		RepoErrorCount: len(snap.RepoErrs),
+		Gran:           string(gran),
 		Stats: overviewStats{
 			Total: len(snap.Pulls), Merged: merged, Open: open, Closed: closed,
 			Additions: additions, Deletions: deletions,
@@ -325,7 +330,11 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 	if largestN < 1 || largestN > 50 {
 		largestN = 5
 	}
-	writeJSON(w, computeOverview(s.store.Snapshot(), largestN))
+	gran := Granularity(r.URL.Query().Get("gran"))
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	writeJSON(w, computeOverview(s.store.Snapshot(), largestN, gran))
 }
 
 func (s *Server) handleAPILeaderboards(w http.ResponseWriter, r *http.Request) {

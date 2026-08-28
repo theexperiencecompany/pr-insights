@@ -37,6 +37,7 @@ import { avatarUrl, getOverview, type OverviewData } from '@/lib/api'
 import { comma, compact } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const mergedChartConfig = {
   merged: { label: 'Merged', color: 'var(--chart-1)' },
@@ -55,7 +56,7 @@ const hourChartConfig = {
   hour: { label: 'Merged', color: 'var(--chart-1)' },
 } satisfies ChartConfig
 
-function SectionTitle({ children }: { children: string }) {
+function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="text-sm font-semibold">{children}</div>
 }
 
@@ -230,7 +231,15 @@ function WhenWeShip({ data }: { data: OverviewData }) {
   )
 }
 
-function OverviewContent({ data }: { data: OverviewData }) {
+function OverviewContent({
+  data,
+  gran,
+  onGranChange,
+}: {
+  data: OverviewData
+  gran: 'week' | 'month'
+  onGranChange: (v: 'week' | 'month') => void
+}) {
   const top = data.topContributors.slice(0, 10)
   const maxMerged = Math.max(1, ...top.map((c) => c.merged))
   const [hideReleases, setHideReleases] = useState(true)
@@ -238,6 +247,9 @@ function OverviewContent({ data }: { data: OverviewData }) {
     ? data.largest.filter(({ pull }) => !/release/i.test(pull.title))
     : data.largest
   ).slice(0, 5)
+
+  const isWeek = gran === 'week'
+  const periodLabel = isWeek ? 'by week' : 'by month'
 
   return (
     <div className="flex flex-col gap-4">
@@ -249,16 +261,38 @@ function OverviewContent({ data }: { data: OverviewData }) {
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-semibold text-muted-foreground">Shipping trends</div>
+        <Tabs value={gran} onValueChange={(v) => onGranChange(v as 'week' | 'month')}>
+          <TabsList className="h-7">
+            <TabsTrigger value="month" className="px-3 py-1 text-xs">
+              Monthly
+            </TabsTrigger>
+            <TabsTrigger value="week" className="px-3 py-1 text-xs">
+              Weekly
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader>
-            <SectionTitle>Merged pull requests by month</SectionTitle>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <SectionTitle>{`Merged pull requests ${periodLabel}`}</SectionTitle>
+            <span className="text-[11px] text-muted-foreground">{data.monthly.length} buckets</span>
           </CardHeader>
           <CardContent>
             <ChartContainer config={mergedChartConfig} className="h-[300px]">
               <AreaChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
                 <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+                <XAxis
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  minTickGap={isWeek ? 24 : 16}
+                  interval="preserveStartEnd"
+                />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
@@ -286,14 +320,22 @@ function OverviewContent({ data }: { data: OverviewData }) {
         </Card>
 
         <Card>
-          <CardHeader>
-            <SectionTitle>Lines changed by month</SectionTitle>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <SectionTitle>{`Lines changed ${periodLabel}`}</SectionTitle>
+            <span className="text-[11px] text-muted-foreground">{data.monthly.length} buckets</span>
           </CardHeader>
           <CardContent>
             <ChartContainer config={linesChartConfig} className="h-[300px]">
               <BarChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
                 <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} />
+                <XAxis
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  minTickGap={isWeek ? 24 : 16}
+                  interval="preserveStartEnd"
+                />
                 <YAxis
                   tickLine={false}
                   axisLine={false}
@@ -396,7 +438,8 @@ function OverviewContent({ data }: { data: OverviewData }) {
 }
 
 export default function OverviewPage() {
-  const { data, loading, error, refetch } = useApi(() => getOverview({ largest: 15 }), [])
+  const [gran, setGran] = useState<'week' | 'month'>('month')
+  const { data, loading, error, refetch } = useApi(() => getOverview({ largest: 15, gran }), [gran])
 
   if (loading) return <Loading />
   if (error) {
@@ -421,7 +464,7 @@ export default function OverviewPage() {
         title="Overview"
         description={`Pull request activity across ${data.org}.`}
       />
-      <OverviewContent data={data} />
+      <OverviewContent data={data} gran={gran} onGranChange={setGran} />
     </div>
   )
 }

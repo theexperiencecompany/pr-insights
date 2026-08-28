@@ -35,26 +35,28 @@ export function Heatmap({ dates, className }: HeatmapProps) {
 
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
-      <div className="flex gap-1 pl-0 text-[9px] text-muted-foreground">
-        {Array.from({ length: weeks }, (_, w) => {
-          const i = total - 1 - w * 7
-          const label = i >= 0 ? monthLabel(i) : null
-          return (
-            <span key={w} className="w-[10px] truncate">
-              {label ?? ''}
-            </span>
-          )
-        })}
-      </div>
-      <div className="flex gap-1">
-        <div className="flex flex-col gap-1 pr-1 text-[9px] leading-[10px] text-muted-foreground">
-          {DAYS.map((d) => (
-            <span key={d} className="h-[10px]">
-              {d}
-            </span>
-          ))}
-        </div>
-        <div className="flex gap-1 overflow-x-auto">
+      <div className="overflow-x-auto">
+        <div className="inline-flex flex-col gap-1.5 min-w-max">
+          <div className="flex gap-1 ml-[34px] text-[10px] leading-none text-muted-foreground">
+            {Array.from({ length: weeks }, (_, w) => {
+              const i = total - 1 - w * 7
+              const label = i >= 0 ? monthLabel(i) : null
+              return (
+                <div key={w} className="w-[10px] shrink-0">
+                  {label ? <span className="whitespace-nowrap">{label}</span> : null}
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex gap-1">
+            <div className="flex flex-col gap-1 pr-2 text-[9px] leading-[10px] text-muted-foreground shrink-0">
+              {DAYS.map((d) => (
+                <span key={d} className="h-[10px]">
+                  {d}
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-1">
           {Array.from({ length: weeks }, (_, w) => (
             <div key={w} className="flex flex-col gap-1">
               {Array.from({ length: 7 }, (_, r) => {
@@ -85,6 +87,8 @@ export function Heatmap({ dates, className }: HeatmapProps) {
               })}
             </div>
           ))}
+        </div>
+          </div>
         </div>
       </div>
       <div className="flex items-center justify-end gap-1 text-[10px] text-muted-foreground">

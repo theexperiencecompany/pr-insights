@@ -107,6 +107,23 @@ export interface WorkflowStat {
   lastConclusion: string
 }
 
+export interface WorkflowRun {
+  id: number
+  repo: string
+  workflow: string
+  branch: string
+  event: string
+  conclusion: string
+  status: string
+  createdAt: string
+  updatedAt: string
+  runStartedAt: string
+  durationSec: number
+}
+
+export const getWorkflowRuns = (params: { workflow: string; repo?: string; limit?: number }): Promise<WorkflowRun[]> =>
+  fetch(`/api/workflow-runs${qs(params)}`).then(json<WorkflowRun[]>)
+
 export interface Status {
   org: string
   repo: string
@@ -126,6 +143,7 @@ export interface OverviewData {
   syncedAt: string | null
   lastError: string
   repoErrorCount: number
+  gran: string
   stats: {
     total: number
     merged: number
@@ -212,7 +230,7 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 }
 
 export const getStatus = (): Promise<Status> => fetch('/api/status', { cache: 'no-store' }).then(json<Status>)
-export const getOverview = (params: { largest?: number } = {}): Promise<OverviewData> =>
+export const getOverview = (params: { largest?: number; gran?: string } = {}): Promise<OverviewData> =>
   fetch(`/api/overview${qs(params)}`).then(json<OverviewData>)
 export const getContributors = (): Promise<ContributorsData> => fetch('/api/contributors').then(json<ContributorsData>)
 export const getContributor = (login: string): Promise<ContributorDetail> =>
@@ -245,6 +263,86 @@ export const getInsights = (params: {
   period?: string
   gran?: string
 } = {}): Promise<InsightsData> => fetch(`/api/insights${qs(params)}`).then(json<InsightsData>)
+
+export const getRepos = (): Promise<RepoStat[]> => fetch('/api/repos', { cache: 'no-store' }).then(json<RepoStat[]>)
+
+// ---- Entire (agent checkpoint analytics) ----
+
+export interface EntireSkill {
+  skill: string
+  count: number
+}
+
+export interface EntireAgent {
+  agentId: string
+  agentLabel: string
+  me: {
+    sessions: number
+    checkpoints: number
+    tokens: number
+    transcriptTokens: number
+    filesChanged: number
+    labels: string[]
+    skills: EntireSkill[]
+    mcpServers: { name: string; count: number }[]
+    toolMix: {
+      shell: number
+      fileOps: number
+      search: number
+      mcp: number
+      agent: number
+      other: number
+    } | null
+  }
+}
+
+export interface EntireData {
+  fetchedAt: string | null
+  lastError: string
+  user: {
+    handle: string
+    accountId: string
+    homeJurisdiction: string
+    avatarUrl: string
+    displayName: string
+    email: string
+    company: string
+    bio: string
+  } | null
+  activity: {
+    stats: {
+      tasks: number
+      orchestration: number
+      iteration: number
+      throughput: number
+      continuity_hours: number
+      streak: number
+      current_streak: number
+      lifetime_streak: number
+      lifetime_current_streak: number
+    }
+    daily_contributions: { date: string; agents: Record<string, number> }[]
+    hourly_contributions: { date: string; hour: number; agent: string; value: number }[]
+    repos: { repo: string; total: number; agents: Record<string, number> }[]
+  } | null
+  recap: {
+    timeframe: string
+    since: string
+    until: string
+    summary: {
+      me: { sessions: number; checkpoints: number; tokens: number }
+      repoCount: number
+      activeDays: number
+    }
+    agents: Record<string, EntireAgent>
+    daily: { date: string; count: number }[]
+  } | null
+}
+
+export const getEntire = (): Promise<EntireData> => fetch('/api/entire', { cache: 'no-store' }).then(json<EntireData>)
+
+export const triggerEntireSync = (): Promise<void> =>
+  fetch('/api/entire/sync', { method: 'POST' }).then(() => undefined)
 
 export const triggerSync = async (): Promise<void> => {
   const res = await fetch('/api/sync', { method: 'POST' })
