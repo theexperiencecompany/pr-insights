@@ -54,7 +54,13 @@ func main() {
 
 	syncer := NewSyncer(cfg.Org, cfg.Repo, token, store)
 
-	srv, err := NewServer(store, syncer, webFS)
+	entire := NewEntireClient(cfg.DataDir)
+	if err := entire.Load(); err != nil {
+		slog.Error("failed to load entire snapshot", "err", err)
+		os.Exit(1)
+	}
+
+	srv, err := NewServer(store, syncer, entire, webFS)
 	if err != nil {
 		slog.Error("failed to initialise server", "err", err)
 		os.Exit(1)
@@ -69,6 +75,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go syncer.Run(ctx, cfg.SyncInterval)
+	go entire.Run(ctx, envDurOr("ENTIRE_SYNC_INTERVAL", 15*time.Minute))
 
 	slog.Info("pr-insights listening", "addr", cfg.Addr, "org", cfg.Org, "data_dir", cfg.DataDir)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

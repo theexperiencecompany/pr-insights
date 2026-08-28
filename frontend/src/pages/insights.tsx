@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { DefaultLegendContentProps, TooltipContentProps } from 'recharts'
 import {
@@ -12,13 +12,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ArrowDown, ArrowUp, CheckCircle2, CircleDashed, XCircle } from 'lucide-react'
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, XCircle } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
 import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
 import { StatCard } from '@/components/stat-card'
-import { getInsights, getStatus } from '@/lib/api'
+import { getInsights, getStatus, getWorkflowRuns, type WorkflowRun, type WorkflowStat } from '@/lib/api'
+import { Badge } from '@/components/ui/badge'
 import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
@@ -105,34 +106,71 @@ function TipRow({ color, label, value }: { color?: string; label: string; value:
   )
 }
 
-function MergedTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
-  if (!active || !payload?.length) return null
-  const merged = Number(payload[0]?.value ?? 0)
-  return (
-    <TipShell label={label}>
-      <div className="font-mono font-medium tabular-nums">
-        {merged.toLocaleString()} PRs merged
-      </div>
-    </TipShell>
-  )
+// Series metadata for the shipping charts: key → label + value formatter.
+const SHIP_SERIES: Record<string, { label: string; format: (v: number) => string }> = {
+  merged: { label: 'Merged', format: (v) => `${comma(Math.round(v))} PRs` },
+  ma: { label: 'Moving avg', format: (v) => `${comma(Math.round(v))} PRs` },
+  forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs` },
+  prev: { label: 'Last year', format: (v) => `${comma(Math.round(v))} PRs` },
+  lines: { label: 'Lines', format: (v) => `${comma(Math.round(v))} lines` },
+  cycle: { label: 'Median', format: (v) => `${v.toFixed(1)} days` },
 }
 
-function LinesTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
-  if (!active || !payload?.length) return null
-  const lines = Number(payload[0]?.value ?? 0)
-  return (
-    <TipShell label={label}>
-      <div className="font-mono font-medium tabular-nums">{lines.toLocaleString()} lines</div>
-    </TipShell>
-  )
+// Display order for the merged chart's tooltip rows (unknown series last).
+const SERIES_ORDER = ['merged', 'ma', 'forecast', 'prev']
+const seriesRank = (key: string): number => {
+  const i = SERIES_ORDER.indexOf(key)
+  return i === -1 ? SERIES_ORDER.length : i
 }
 
-function CycleTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
+// SeriesTip renders one row per series present in the hovered point, so every
+// line (merged, moving average, last year, forecast) is explained at once.
+function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
-  const days = Number(payload[0]?.value ?? 0)
+  const row = payload[0]?.payload as { merged?: number | null; ma?: number | null } | undefined
+  const entries = payload
+    .map((p) => {
+      const key = String(p.dataKey)
+      return {
+        key,
+        spec: SHIP_SERIES[key],
+        value: p.value,
+        color: (p.color as string) ?? (p.stroke as string),
+      }
+    })
+    .filter((e): e is { key: string; spec: (typeof SHIP_SERIES)[string]; value: number; color: string } =>
+      Boolean(e.spec) && typeof e.value === 'number' && Number.isFinite(e.value),
+    )
+    .sort((a, b) => seriesRank(a.key) - seriesRank(b.key))
+  if (entries.length === 0) return null
+
+  const mergedEntry = entries.find((e) => e.key === 'merged')
+  const delta =
+    mergedEntry && row && typeof row.merged === 'number' && typeof row.ma === 'number' && row.ma > 0
+      ? ((row.merged - row.ma) / row.ma) * 100
+      : null
+  const dashed = entries.filter((e) => e.key === 'forecast' || e.key === 'prev')
+  const tipLabel = typeof label === 'string' && label.startsWith('+') ? `Forecast ${label}` : label
+
   return (
-    <TipShell label={label}>
-      <div className="font-mono font-medium tabular-nums">{days.toFixed(1)} days</div>
+    <TipShell label={tipLabel}>
+      {entries.map((e) => (
+        <TipRow key={e.key} color={e.color} label={e.spec.label} value={e.spec.format(e.value)} />
+      ))}
+      {delta !== null ? (
+        <div
+          className={`text-[11px] ${
+            delta >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+          }`}
+        >
+          {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs moving avg
+        </div>
+      ) : null}
+      {dashed.length > 0 ? (
+        <div className="text-[11px] text-muted-foreground">
+          {dashed.map((d) => d.spec.label).join(' & ')} shown dashed
+        </div>
+      ) : null}
     </TipShell>
   )
 }
@@ -381,6 +419,66 @@ export default function InsightsPage() {
     dir: 'desc',
   })
 
+  // Workflow hide preferences, persisted locally. Defaults: hide the bot CI
+  // noise (Claude Code / Claude Code Review / Code Quality) and one-off runs.
+  const PREFS_KEY = 'pr-insights-workflow-prefs'
+  const DEFAULT_HIDDEN = ['Claude Code', 'Claude Code Review', 'Code Quality']
+  const [wfPrefs, setWfPrefs] = useState<{ hidden: string[]; hideOneOffs: boolean }>(() => {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY)
+      if (raw) {
+        const p = JSON.parse(raw) as { hidden?: unknown; hideOneOffs?: unknown }
+        return {
+          hidden: Array.isArray(p.hidden) ? p.hidden.filter((x): x is string => typeof x === 'string') : [],
+          hideOneOffs: p.hideOneOffs !== false,
+        }
+      }
+    } catch {
+      // ignore malformed prefs
+    }
+    return { hidden: DEFAULT_HIDDEN, hideOneOffs: true }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(wfPrefs))
+    } catch {
+      // storage unavailable — prefs just don't persist
+    }
+  }, [wfPrefs])
+
+  // Expandable per-workflow run drill-down.
+  const [expandedWf, setExpandedWf] = useState<string | null>(null)
+  const [wfRuns, setWfRuns] = useState<Record<string, WorkflowRun[]>>({})
+  const [runsLoading, setRunsLoading] = useState<string | null>(null)
+  const toggleExpand = async (key: string, repo: string, workflow: string) => {
+    if (expandedWf === key) {
+      setExpandedWf(null)
+      return
+    }
+    setExpandedWf(key)
+    if (!wfRuns[key]) {
+      setRunsLoading(key)
+      try {
+        const runs = await getWorkflowRuns({ workflow, repo, limit: 12 })
+        setWfRuns((m) => ({ ...m, [key]: runs }))
+      } catch {
+        // leave empty — the row shows "no runs"
+      } finally {
+        setRunsLoading(null)
+      }
+    }
+  }
+
+  const toggleHidden = (wf: WorkflowStat) => {
+    const key = `${wf.repo}/${wf.workflow}`
+    setWfPrefs((p) => {
+      const currently = p.hidden.includes(key) || p.hidden.includes(wf.workflow)
+      // Normalise to the repo-qualified key so defaults can be un-hidden.
+      const hidden = p.hidden.filter((k) => k !== key && k !== wf.workflow)
+      return { ...p, hidden: currently ? hidden : [...hidden, key] }
+    })
+  }
+
   const handleWfSort = (key: string) => {
     setWfSort((s) => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }))
   }
@@ -407,7 +505,22 @@ export default function InsightsPage() {
     return rows
   }, [data, wfSort])
 
-  const visibleWorkflows = sortedWorkflows.slice(0, showAllWorkflows ? undefined : 8)
+  const filteredWorkflows = useMemo(
+    () =>
+      sortedWorkflows.filter((wf) => {
+        const hidden = wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow)
+        return !hidden && !(wfPrefs.hideOneOffs && wf.runs <= 1)
+      }),
+    [sortedWorkflows, wfPrefs],
+  )
+  const visibleWorkflows = showAllWorkflows ? filteredWorkflows : filteredWorkflows.slice(0, 8)
+  const hiddenWorkflows = useMemo(
+    () =>
+      sortedWorkflows.filter(
+        (wf) => wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow),
+      ),
+    [sortedWorkflows, wfPrefs],
+  )
 
   const toggleSeries = (key: string) => setHidden((h) => ({ ...h, [key]: !h[key] }))
 
@@ -478,7 +591,7 @@ export default function InsightsPage() {
                         minTickGap={24}
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
-                      <ChartTooltip content={<MergedTip />} />
+                      <ChartTooltip content={<SeriesTip />} />
                       {mergedData.some((r) => r.prev !== null) && (
                         <Line
                           type="monotone"
@@ -548,7 +661,7 @@ export default function InsightsPage() {
                         minTickGap={24}
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
-                      <ChartTooltip content={<LinesTip />} />
+                      <ChartTooltip content={<SeriesTip />} />
                       <Area
                         type="monotone"
                         dataKey="lines"
@@ -579,7 +692,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickFormatter={(v: number) => `${v}d`}
                       />
-                      <ChartTooltip content={<CycleTip />} />
+                      <ChartTooltip content={<SeriesTip />} />
                       <Line
                         type="monotone"
                         isAnimationActive={false}
@@ -726,7 +839,7 @@ export default function InsightsPage() {
                       <Line
                         type="monotone"
                         isAnimationActive={false}
-                        dataKey="rate"
+                        dataKey="successRate"
                         stroke="var(--color-rate)"
                         strokeWidth={2}
                         dot={false}
@@ -792,7 +905,7 @@ export default function InsightsPage() {
                       <Line
                         type="monotone"
                         isAnimationActive={false}
-                        dataKey="duration"
+                        dataKey="medianDurationMin"
                         stroke="var(--color-duration)"
                         strokeWidth={2}
                         dot={false}
@@ -804,9 +917,25 @@ export default function InsightsPage() {
               </div>
 
               <ChartCard title="Workflows" className="mt-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+                  <p className="text-xs text-muted-foreground">
+                    {filteredWorkflows.length} of {data.workflows.length} workflows shown
+                    {wfPrefs.hidden.length > 0 ? ` · ${wfPrefs.hidden.length} hidden` : ''}
+                  </p>
+                  <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={wfPrefs.hideOneOffs}
+                      onChange={(e) => setWfPrefs((p) => ({ ...p, hideOneOffs: e.target.checked }))}
+                      className="size-3.5 accent-[var(--chart-1)]"
+                    />
+                    Hide one-off runs (single run)
+                  </label>
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-14" />
                       <TableHead>Workflow</TableHead>
                       <TableHead>Repository</TableHead>
                       <SortableHead label="Runs" k="runs" sort={wfSort} onSort={handleWfSort} className="text-right" />
@@ -819,81 +948,161 @@ export default function InsightsPage() {
                   </TableHeader>
                   <TableBody>
                     {visibleWorkflows.map((wf) => {
+                      const key = `${wf.repo}/${wf.workflow}`
                       const repoHref = org
                         ? `https://github.com/${org}/${wf.repo}/actions`
                         : null
+                      const expanded = expandedWf === key
+                      const runs = wfRuns[key]
                       return (
-                        <TableRow key={`${wf.repo}/${wf.workflow}`}>
-                          <TableCell className="max-w-[240px]">
-                            <div className="flex items-center gap-2">
-                              <ConclusionIcon conclusion={wf.lastConclusion} />
-                              <span className="truncate font-semibold">{wf.workflow}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {repoHref ? (
-                              <a
-                                href={repoHref}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-primary hover:underline"
-                              >
-                                {wf.repo}
-                              </a>
-                            ) : (
-                              <span className="text-muted-foreground">{wf.repo}</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {comma(wf.runs)}
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              'text-right tabular-nums',
-                              wf.successRate >= 90 ? 'text-chart-2' : 'text-chart-3',
-                            )}
-                          >
-                            {wf.successRate.toFixed(1)}%
-                          </TableCell>
-                          <TableCell>
-                            <div
-                              className="flex items-center gap-1"
-                              title={`Monthly success rate: ${wf.trend
-                                .map((v) => (v < 0 ? '–' : `${v.toFixed(0)}%`))
-                                .join(' · ')}`}
-                            >
-                              {wf.trend.map((v, i) => (
-                                <span
-                                  key={i}
-                                  className={cn(
-                                    'size-2 rounded-full',
-                                    v < 0
-                                      ? 'bg-muted'
-                                      : v >= 90
-                                        ? 'bg-chart-2'
-                                        : v >= 50
-                                          ? 'bg-amber-500'
-                                          : 'bg-chart-3',
+                        <Fragment key={key}>
+                          <TableRow className="group">
+                            <TableCell>
+                              <div className="flex items-center gap-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpand(key, wf.repo, wf.workflow)}
+                                  className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                  title={expanded ? 'Collapse recent runs' : 'Show recent runs'}
+                                >
+                                  {expanded ? (
+                                    <ChevronDown className="size-4" />
+                                  ) : (
+                                    <ChevronRight className="size-4" />
                                   )}
-                                />
-                              ))}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtDuration(wf.medianDurationMin)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtDuration(wf.longestDurationMin)}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {formatDate(wf.lastRunAt) || 'Never'}
-                          </TableCell>
-                        </TableRow>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleHidden(wf)}
+                                  className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                                  title="Hide this workflow"
+                                >
+                                  <EyeOff className="size-4" />
+                                </button>
+                              </div>
+                            </TableCell>
+                            <TableCell className="min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(key, wf.repo, wf.workflow)}
+                                className="flex w-full items-center gap-2 text-left"
+                                title={wf.workflow}
+                              >
+                                <ConclusionIcon conclusion={wf.lastConclusion} />
+                                <span className="truncate font-semibold">{wf.workflow}</span>
+                              </button>
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap">
+                              {repoHref ? (
+                                <a
+                                  href={repoHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-primary hover:underline"
+                                >
+                                  {wf.repo}
+                                </a>
+                              ) : (
+                                <span className="text-muted-foreground">{wf.repo}</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {comma(wf.runs)}
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                'text-right tabular-nums',
+                                wf.successRate >= 90 ? 'text-chart-2' : wf.successRate >= 50 ? 'text-amber-500' : 'text-chart-3',
+                              )}
+                            >
+                              {wf.successRate.toFixed(1)}%
+                            </TableCell>
+                            <TableCell>
+                              <div
+                                className="flex items-center gap-1"
+                                title={`Monthly success rate: ${wf.trend
+                                  .map((v) => (v < 0 ? '–' : `${v.toFixed(0)}%`))
+                                  .join(' · ')}`}
+                              >
+                                {wf.trend.map((v, i) => (
+                                  <span
+                                    key={i}
+                                    className={cn(
+                                      'size-2 rounded-full',
+                                      v < 0
+                                        ? 'bg-muted'
+                                        : v >= 90
+                                          ? 'bg-chart-2'
+                                          : v >= 50
+                                            ? 'bg-amber-500'
+                                            : 'bg-chart-3',
+                                    )}
+                                  />
+                                ))}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtDuration(wf.medianDurationMin)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtDuration(wf.longestDurationMin)}
+                            </TableCell>
+                            <TableCell className="text-right text-muted-foreground">
+                              {formatDate(wf.lastRunAt) || 'Never'}
+                            </TableCell>
+                          </TableRow>
+                          {expanded ? (
+                            <TableRow>
+                              <TableCell colSpan={9} className="bg-muted/30 p-0">
+                                <div className="px-4 py-3">
+                                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Recent runs
+                                  </div>
+                                  {runsLoading === key ? (
+                                    <p className="text-xs text-muted-foreground">Loading runs…</p>
+                                  ) : runs && runs.length > 0 ? (
+                                    <div className="space-y-1">
+                                      {runs.map((run) => (
+                                        <div key={run.id} className="flex items-center gap-2 text-xs">
+                                          <ConclusionIcon conclusion={run.conclusion} />
+                                          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+                                            {run.branch}
+                                          </span>
+                                          <Badge variant="secondary" className="font-mono">
+                                            {run.event}
+                                          </Badge>
+                                          <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+                                            {fmtDuration(run.durationSec / 60)}
+                                          </span>
+                                          <span className="whitespace-nowrap text-muted-foreground">
+                                            {formatDate(run.createdAt)}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                      No runs in the synced window.
+                                    </p>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ) : null}
+                        </Fragment>
                       )
                     })}
+                    {visibleWorkflows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                          Nothing to show — everything is hidden or filtered out. Use the eye buttons to restore
+                          workflows.
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
                   </TableBody>
                 </Table>
-                {data.workflows.length > 8 && (
+                {filteredWorkflows.length > 8 && (
                   <div className="border-t border-border px-4 py-2">
                     <button
                       type="button"
@@ -902,11 +1111,58 @@ export default function InsightsPage() {
                     >
                       {showAllWorkflows
                         ? `Show fewer`
-                        : `Show all (${data.workflows.length})`}
+                        : `Show all (${filteredWorkflows.length})`}
                     </button>
                   </div>
                 )}
               </ChartCard>
+
+              {hiddenWorkflows.length > 0 ? (
+                <ChartCard title={`Hidden workflows (${hiddenWorkflows.length})`} className="mt-4">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Workflow</TableHead>
+                        <TableHead className="text-right">Runs</TableHead>
+                        <TableHead className="text-right">Success rate</TableHead>
+                        <TableHead className="text-right">Last run</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {hiddenWorkflows.map((wf) => (
+                        <TableRow key={`${wf.repo}/${wf.workflow}`} className="opacity-60">
+                          <TableCell className="min-w-0">
+                            <div className="flex items-center gap-2" title={wf.workflow}>
+                              <ConclusionIcon conclusion={wf.lastConclusion} />
+                              <span className="truncate font-medium">{wf.workflow}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{comma(wf.runs)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{wf.successRate.toFixed(1)}%</TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {formatDate(wf.lastRunAt) || 'Never'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <button
+                              type="button"
+                              onClick={() => toggleHidden(wf)}
+                              className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted hover:underline"
+                            >
+                              <Eye className="size-3.5" />
+                              Show
+                            </button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <div className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+                    Hidden by default: Claude Code, Claude Code Review and Code Quality bot CI. Hover a row and click
+                    the eye to hide anything else; restore from here.
+                  </div>
+                </ChartCard>
+              ) : null}
             </>
           )}
         </>

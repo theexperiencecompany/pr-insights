@@ -24,14 +24,15 @@ commits), contributor and repository rankings, shipping velocity and CI charts
 | `/contributors` | Per-author rankings: merged PRs, +/− lines, avg diff, largest PR, activity window |
 | `/repos` | Per-repository aggregates |
 | `/insights` | Shipping velocity (merged PRs, lines merged, cycle time) + CI health (runs, success rate, duration, workflow breakdown) — filterable by repository, period (3m/6m/12m/all) and granularity (weekly/monthly) |
+| `/entire` | Agent checkpoint analytics from [entire.io](https://entire.io) — throughput, streaks, per-day/per-hour checkpoint charts by agent (Claude Code, pi, Codex, …), per-repo checkpoint↔PR join, per-agent recap (tokens, tool mix, skills, MCP servers) |
 | `/pulls` | Full PR list with state/repo/search filters and pagination |
 
 ## API
 
 The frontend consumes JSON endpoints: `/api/overview`, `/api/leaderboards`,
 `/api/contributors`, `/api/repos`, `/api/insights`, `/api/pulls`,
-`/api/status`, `POST /api/sync`. In dev, `pnpm dev` proxies `/api` to the Go
-server (default `127.0.0.1:8787`).
+`/api/entire`, `/api/status`, `POST /api/sync`, `POST /api/entire/sync`. In dev,
+`pnpm dev` proxies `/api` to the Go server (default `127.0.0.1:8787`).
 
 ## Build
 
@@ -54,6 +55,9 @@ GITHUB_TOKEN=github_pat_xxx PR_INSIGHTS_ADDR=127.0.0.1:8787 ./pr-insights
 | `PR_INSIGHTS_ADDR` | `127.0.0.1:8787` | Listen address |
 | `PR_INSIGHTS_DATA_DIR` | `./data` | Snapshot location |
 | `PR_INSIGHTS_SYNC_INTERVAL` | `6h` | Auto-refresh interval |
+| `ENTIRE_BIN` | `entire` | Path to the entire CLI (`entire api` is the analytics backend) |
+| `ENTIRE_HOME` | `<data dir>/entire-home` | `HOME` override for the entire CLI's config/token (server deploys) |
+| `ENTIRE_SYNC_INTERVAL` | `15m` | Auto-refresh interval for the entire snapshot |
 
 ## Deploy (systemd)
 
@@ -70,6 +74,20 @@ back to `gh auth token`. Expose it on the tailnet with:
 ```bash
 tailscale serve --bg --https=18443 http://127.0.0.1:8787
 ```
+
+### Entire (agent analytics)
+
+The `/entire` page shells out to the [entire CLI](https://docs.entire.io)
+(`entire api --to cell /api/v1/me/activity` + `/recap`) and caches the JSON
+into `entire.json` next to the state snapshot. `deploy.sh` installs the CLI
+on the host and prints the one-time login command:
+
+```bash
+ssh gaia-home-server "sudo -u prinsights env HOME=/var/lib/pr-insights/entire-home /usr/local/bin/entire login --device"
+```
+
+The login is stored under `ENTIRE_HOME` so the service keeps its own
+credentials (systemd hardening untouched).
 
 ## Notes
 

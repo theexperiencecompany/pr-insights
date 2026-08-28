@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/leaderboards', label: 'Leaderboards', end: false },
   { to: '/contributors', label: 'Contributors', end: false },
   { to: '/insights', label: 'Insights', end: false },
+  { to: '/entire', label: 'Entire', end: false },
   { to: '/pulls', label: 'Pull requests', end: false },
 ]
 

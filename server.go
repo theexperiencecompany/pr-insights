@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -19,27 +20,32 @@ const perPage = 25
 type Server struct {
 	store  *State
 	syncer *Syncer
+	entire *EntireClient
 	web    fs.FS
 }
 
-func NewServer(store *State, syncer *Syncer, webFS embed.FS) (*Server, error) {
+func NewServer(store *State, syncer *Syncer, entire *EntireClient, webFS embed.FS) (*Server, error) {
 	web, err := fs.Sub(webFS, "frontend/dist")
 	if err != nil {
 		return nil, fmt.Errorf("embedded frontend missing (run pnpm --dir frontend build first): %w", err)
 	}
-	return &Server{store: store, syncer: syncer, web: web}, nil
+	return &Server{store: store, syncer: syncer, entire: entire, web: web}, nil
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("POST /api/sync", s.handleSync)
+	mux.HandleFunc("GET /api/entire", s.handleEntire)
+	mux.HandleFunc("POST /api/entire/sync", s.handleEntireSync)
+	mux.HandleFunc("GET /api/repos", s.handleAPIRepos)
 	mux.HandleFunc("GET /api/overview", s.handleAPIOverview)
 	mux.HandleFunc("GET /api/leaderboards", s.handleAPILeaderboards)
 	mux.HandleFunc("GET /api/shame", s.handleAPIShame)
 	mux.HandleFunc("GET /api/contributors", s.handleAPIContributors)
 	mux.HandleFunc("GET /api/contributor", s.handleAPIContributor)
 	mux.HandleFunc("GET /api/insights", s.handleAPIInsights)
+	mux.HandleFunc("GET /api/workflow-runs", s.handleWorkflowRuns)
 	mux.HandleFunc("GET /api/pulls", s.handleAPIPulls)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -75,6 +81,74 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	fmt.Fprint(w, `{"started":true}`)
+}
+
+// ---- Entire (agent checkpoint analytics) ----
+
+func (s *Server) handleEntire(w http.ResponseWriter, r *http.Request) {
+	snap := s.entire.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(snap); err != nil {
+		slog.Warn("encode entire payload", "err", err)
+	}
+}
+
+func (s *Server) handleEntireSync(w http.ResponseWriter, r *http.Request) {
+	s.entire.Trigger()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprint(w, `{"started":true}`)
+}
+
+// handleAPIRepos serves per-repository aggregates.
+func (s *Server) handleAPIRepos(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Snapshot()
+	stats := RepoStats(snap.Pulls, snap.Repos)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(stats); err != nil {
+		slog.Warn("encode repos payload", "err", err)
+	}
+}
+
+// handleWorkflowRuns serves the most recent runs of one workflow (for the
+// per-workflow drill-down on the insights page).
+func (s *Server) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
+	workflow := r.URL.Query().Get("workflow")
+	if workflow == "" {
+		http.Error(w, "workflow parameter is required", http.StatusBadRequest)
+		return
+	}
+	repo := r.URL.Query().Get("repo")
+	limit := queryInt(r, "limit", 10)
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	snap := s.store.Snapshot()
+	out := make([]Run, 0, limit)
+	for i := range snap.Runs {
+		run := &snap.Runs[i]
+		if run.Workflow != workflow {
+			continue
+		}
+		if repo != "" && run.Repo != repo {
+			continue
+		}
+		out = append(out, *run)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		slog.Warn("encode workflow-runs payload", "err", err)
+	}
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

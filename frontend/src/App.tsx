@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom'
 import { Layout } from '@/components/layout'
 import ContributorPage from '@/pages/contributor'
 import ContributorsPage from '@/pages/contributors'
+import EntirePage from '@/pages/entire'
 import InsightsPage from '@/pages/insights'
 import LeaderboardsPage from '@/pages/leaderboards'
 import OverviewPage from '@/pages/overview'
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="contributors" element={<ContributorsPage />} />
         <Route path="contributors/:login" element={<ContributorPage />} />
         <Route path="insights" element={<InsightsPage />} />
+        <Route path="entire" element={<EntirePage />} />
         <Route path="pulls" element={<PullsPage />} />
       </Route>
     </Routes>
