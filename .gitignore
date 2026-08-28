@@ -1,4 +1,9 @@
 .agents/
+.claude/
+.codex/
+.entire/
+.opencode/
+.pi/
 data/
 pr-insights
 *.log
