@@ -75,6 +75,7 @@ export interface RepoStat extends RepoInfo {
 }
 
 export interface ShipBucket {
+  key: string
   label: string
   merged: number
   additions: number
@@ -160,7 +161,18 @@ export interface OverviewData {
   monthly: ShipBucket[]
   topContributors: Contributor[]
   largest: RankedPull[]
-  velocity: { label: string; current: number; previous: number; deltaPct: number }[]
+  velocity: {
+    label: string
+    current: number
+    previous: number
+    deltaPct: number
+    currentFrom?: string
+    currentTo?: string
+    previousFrom?: string
+    previousTo?: string
+    currentRange?: string
+    previousRange?: string
+  }[]
   bot: { botMerged: number; humanMerged: number; botPct: number; bots: string[] }
   shipDist: { zone: string; weekday: number[]; weekdayLabels: string[]; hour: number[] }
   bus: { top3Share: number; top: Contributor[] }
@@ -233,8 +245,8 @@ export const getStatus = (): Promise<Status> => fetch('/api/status', { cache: 'n
 export const getOverview = (params: { largest?: number; gran?: string } = {}): Promise<OverviewData> =>
   fetch(`/api/overview${qs(params)}`).then(json<OverviewData>)
 export const getContributors = (): Promise<ContributorsData> => fetch('/api/contributors').then(json<ContributorsData>)
-export const getContributor = (login: string): Promise<ContributorDetail> =>
-  fetch(`/api/contributor${qs({ login })}`).then(json<ContributorDetail>)
+export const getContributor = (login: string, params: { gran?: string } = {}): Promise<ContributorDetail> =>
+  fetch(`/api/contributor${qs({ login, gran: params.gran })}`).then(json<ContributorDetail>)
 export const getShame = (): Promise<ShameData> => fetch('/api/shame').then(json<ShameData>)
 
 export const getLeaderboards = (params: {

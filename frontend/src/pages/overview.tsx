@@ -1,18 +1,22 @@
-import { TrendingDown, TrendingUp } from 'lucide-react'
-import { useState } from 'react'
+import { Loader2, TrendingDown, TrendingUp } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Area,
   AreaChart,
   Bar,
   BarChart,
+  Brush,
   CartesianGrid,
+  ReferenceLine,
   XAxis,
   YAxis,
 } from 'recharts'
 
 import { ContributorBar } from '@/components/contributor-bar'
 import { EmptyState } from '@/components/empty-state'
-import { Loading } from '@/components/loading'
+import { Heatmap } from '@/components/heatmap'
+import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -32,6 +36,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { avatarUrl, getOverview, type OverviewData } from '@/lib/api'
 import { comma, compact } from '@/lib/format'
@@ -73,7 +78,7 @@ function StatStrip({ data }: { data: OverviewData }) {
     { label: 'Files changed', value: comma(data.stats.files) },
   ]
   return (
-    <div className="grid grid-cols-2 divide-x divide-border overflow-hidden rounded-[6px] border border-border sm:grid-cols-4 xl:grid-cols-8">
+    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-border bg-border sm:grid-cols-4 xl:grid-cols-8">
       {cells.map((c) => (
         <div key={c.label} className="flex flex-col gap-0.5 bg-card px-3 py-2">
           <span className={cn('text-base font-semibold leading-tight tabular-nums', c.className)}>
@@ -88,31 +93,101 @@ function StatStrip({ data }: { data: OverviewData }) {
 
 function VelocityCard({ v }: { v: OverviewData['velocity'][number] }) {
   const pct = v.deltaPct
+  const isNew = v.previous === 0 && v.current > 0
+  const isEmpty = v.current === 0 && v.previous === 0
   const up = pct > 0
-  const flat = pct === 0
+  const down = pct < 0
+  const flat = !isNew && !isEmpty && pct === 0
+
+  // date ranges for tooltip — prefer server-provided human ranges, fallback to computed
+  const currentRange = v.currentRange
+  const previousRange = v.previousRange
+  const tooltipMain = currentRange && previousRange
+    ? `${currentRange} vs ${previousRange}`
+    : isNew
+      ? `${comma(v.current)} in ${v.label} — no merges in prior period`
+      : `${comma(v.current)} vs ${comma(v.previous)} prior ${v.label.replace('This ', '').toLowerCase()}`
+
+  let badge: React.ReactNode
+  if (isEmpty) {
+    badge = <span className="text-xs font-semibold tabular-nums text-muted-foreground">—</span>
+  } else if (isNew) {
+    badge = (
+      <Badge
+        variant="secondary"
+        className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-blue-200 dark:border-blue-800 px-1.5 py-0 text-[11px] font-semibold"
+      >
+        New
+      </Badge>
+    )
+  } else if (flat) {
+    badge = <span className="text-xs font-semibold tabular-nums text-muted-foreground">—</span>
+  } else if (up) {
+    badge = (
+      <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-green-600 dark:text-green-400">
+        <TrendingUp className="size-3.5" />+{pct.toFixed(0)}%
+      </span>
+    )
+  } else if (down) {
+    badge = (
+      <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-red-600 dark:text-red-400">
+        <TrendingDown className="size-3.5" />
+        {pct.toFixed(0)}%
+      </span>
+    )
+  } else {
+    badge = <span className="text-xs font-semibold tabular-nums text-muted-foreground">—</span>
+  }
+
   return (
     <Card className="rounded-[6px]">
       <CardContent className="p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium text-muted-foreground">{v.label}</span>
-          {flat ? (
-            <span className="text-xs font-semibold tabular-nums text-muted-foreground">—</span>
-          ) : up ? (
-            <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-green-600 dark:text-green-400">
-              <TrendingUp className="size-3.5" />
-              +{pct.toFixed(0)}%
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-xs font-semibold tabular-nums text-red-600 dark:text-red-400">
-              <TrendingDown className="size-3.5" />
-              {pct.toFixed(0)}%
-            </span>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-default">{badge}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[300px] text-xs leading-relaxed">
+              <div className="font-medium">{v.label} velocity</div>
+              {currentRange && previousRange ? (
+                <>
+                  <div>
+                    Current: {currentRange} · {comma(v.current)} merged
+                  </div>
+                  <div>
+                    Previous: {previousRange} · {comma(v.previous)} merged
+                  </div>
+                </>
+              ) : (
+                <div>
+                  {comma(v.current)} vs {comma(v.previous)} prior {v.label.replace('This ', '').toLowerCase()}
+                </div>
+              )}
+              {isNew ? (
+                <div className="text-[11px] opacity-80">No merges in previous period — marked New, not +100%</div>
+              ) : isEmpty ? (
+                <div className="text-[11px] opacity-80">No merges in either period</div>
+              ) : null}
+              {v.currentFrom && v.currentTo && v.previousFrom && v.previousTo ? (
+                <div className="text-[11px] opacity-70">
+                  {v.currentFrom} → {v.currentTo} vs {v.previousFrom} → {v.previousTo} (UTC)
+                </div>
+              ) : null}
+            </TooltipContent>
+          </Tooltip>
         </div>
         <div className="mt-1 text-xl font-semibold tabular-nums">{comma(v.current)}</div>
-        <div className="text-[11px] text-muted-foreground">
-          merged · vs {comma(v.previous)} last {v.label.replace('This ', '').toLowerCase()}
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="cursor-default text-[11px] text-muted-foreground">
+              merged · vs {comma(v.previous)} last {v.label.replace('This ', '').toLowerCase()}
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            {tooltipMain}
+          </TooltipContent>
+        </Tooltip>
       </CardContent>
     </Card>
   )
@@ -173,20 +248,119 @@ function BotBusCard({ data }: { data: OverviewData }) {
 }
 
 function WhenWeShip({ data }: { data: OverviewData }) {
-  const weekday = data.shipDist.weekday.map((v, i) => ({
-    day: data.shipDist.weekdayLabels[i] ?? String(i),
-    merged: v,
-  }))
-  const hour = data.shipDist.hour.map((v, i) => ({ hour: `${i}h`, merged: v }))
+  const viewerTz = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone
+    } catch {
+      return 'UTC'
+    }
+  })()
+
+  const weekStartsOn = useMemo(() => {
+    try {
+      // @ts-ignore
+      const loc = new Intl.Locale(navigator.language)
+      // @ts-ignore
+      const info = (loc as any).weekInfo ?? (loc as any).getWeekInfo?.()
+      if (info?.firstDay != null) {
+        return info.firstDay === 7 ? 0 : info.firstDay
+      }
+    } catch {}
+    return 1
+  }, [])
+
+  const [tzMode, setTzMode] = useState<'server' | 'local'>(() => {
+    try {
+      const v = localStorage.getItem('pr-insights-tz-mode')
+      return v === 'local' ? 'local' : 'server'
+    } catch {
+      return 'server'
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('pr-insights-tz-mode', tzMode)
+    } catch {}
+  }, [tzMode])
+
+  const { weekdayData, hourData, zoneLabel } = useMemo(() => {
+    if (tzMode === 'server') {
+      const wd = data.shipDist.weekday.map((v, i) => ({
+        day: data.shipDist.weekdayLabels[i] ?? String(i),
+        merged: v,
+      }))
+      const hr = data.shipDist.hour.map((v, i) => ({ hour: `${i}h`, merged: v }))
+      let finalWd = wd
+      if (weekStartsOn === 0) {
+        const sun = wd[6]
+        finalWd = [sun, ...wd.slice(0, 6)]
+      }
+      return { weekdayData: finalWd, hourData: hr, zoneLabel: data.shipDist.zone || 'UTC' }
+    }
+    const offsetHours = -new Date().getTimezoneOffset() / 60
+    const shift = Math.round(offsetHours)
+    const shiftedHour = new Array(24).fill(0)
+    for (let i = 0; i < 24; i++) {
+      const localHour = (i + shift + 24) % 24
+      shiftedHour[localHour] = (shiftedHour[localHour] ?? 0) + (data.shipDist.hour[i] ?? 0)
+    }
+    const hr = shiftedHour.map((v, i) => ({ hour: `${i}h`, merged: v }))
+    let wd = data.shipDist.weekday.map((v, i) => ({
+      day: data.shipDist.weekdayLabels[i] ?? String(i),
+      merged: v,
+    }))
+    const dayShift = Math.round(shift / 24)
+    if (dayShift !== 0) {
+      const n = wd.length
+      const rotated = new Array(n)
+      for (let i = 0; i < n; i++) {
+        rotated[(i + dayShift + n) % n] = wd[i]
+      }
+      wd = rotated.map((entry: any, idx: number) => ({
+        day: data.shipDist.weekdayLabels[(idx - dayShift + n) % n] ?? String(idx),
+        merged: entry.merged,
+      }))
+    }
+    let finalWd = wd
+    if (weekStartsOn === 0) {
+      const sun = wd[6]
+      finalWd = [sun, ...wd.slice(0, 6)]
+    }
+    return { weekdayData: finalWd, hourData: hr, zoneLabel: viewerTz }
+  }, [data.shipDist, tzMode, viewerTz, weekStartsOn])
+
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <Card className="rounded-[6px]">
-        <CardHeader className="pb-2">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <SectionTitle>Merges by weekday</SectionTitle>
+          <div className="flex items-center gap-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setTzMode('server')}
+              className={cn(
+                'rounded px-2 py-0.5 text-xs font-medium',
+                tzMode === 'server' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted',
+              )}
+            >
+              Server (UTC)
+            </button>
+            <button
+              type="button"
+              onClick={() => setTzMode('local')}
+              className={cn(
+                'rounded px-2 py-0.5 text-xs font-medium',
+                tzMode === 'local' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted',
+              )}
+              title={viewerTz}
+            >
+              Local
+            </button>
+          </div>
         </CardHeader>
         <CardContent>
           <ChartContainer config={weekdayChartConfig} className="aspect-auto h-36">
-            <BarChart data={weekday} margin={{ left: 0, right: 4, top: 4 }}>
+            <BarChart data={weekdayData} margin={{ left: 0, right: 4, top: 4 }}>
               <CartesianGrid vertical={false} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={6} />
               <YAxis hide />
@@ -200,12 +374,35 @@ function WhenWeShip({ data }: { data: OverviewData }) {
         </CardContent>
       </Card>
       <Card className="rounded-[6px]">
-        <CardHeader className="pb-2">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <SectionTitle>Merges by hour</SectionTitle>
+          <div className="flex items-center gap-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setTzMode('server')}
+              className={cn(
+                'rounded px-2 py-0.5 text-xs font-medium',
+                tzMode === 'server' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted',
+              )}
+            >
+              Server (UTC)
+            </button>
+            <button
+              type="button"
+              onClick={() => setTzMode('local')}
+              className={cn(
+                'rounded px-2 py-0.5 text-xs font-medium',
+                tzMode === 'local' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted',
+              )}
+              title={viewerTz}
+            >
+              Local
+            </button>
+          </div>
         </CardHeader>
         <CardContent>
           <ChartContainer config={hourChartConfig} className="aspect-auto h-36">
-            <BarChart data={hour} margin={{ left: 0, right: 4, top: 4 }}>
+            <BarChart data={hourData} margin={{ left: 0, right: 4, top: 4 }}>
               <CartesianGrid vertical={false} />
               <XAxis
                 dataKey="hour"
@@ -225,7 +422,7 @@ function WhenWeShip({ data }: { data: OverviewData }) {
         </CardContent>
       </Card>
       <div className="text-[11px] text-muted-foreground lg:col-span-2">
-        Times in {data.shipDist.zone} (server local time)
+        Times in {zoneLabel} {tzMode === 'local' ? `· viewer ${viewerTz}` : '· server UTC'} {weekStartsOn === 0 ? '· week starts Sunday' : '· week starts Monday'}
       </div>
     </div>
   )
@@ -243,6 +440,7 @@ function OverviewContent({
   const top = data.topContributors.slice(0, 10)
   const maxMerged = Math.max(1, ...top.map((c) => c.merged))
   const [hideReleases, setHideReleases] = useState(true)
+  const [searchParams, setSearchParams] = useSearchParams()
   const largest = (hideReleases
     ? data.largest.filter(({ pull }) => !/release/i.test(pull.title))
     : data.largest
@@ -250,6 +448,88 @@ function OverviewContent({
 
   const isWeek = gran === 'week'
   const periodLabel = isWeek ? 'by week' : 'by month'
+  const fromParam = searchParams.get('from')
+  const toParam = searchParams.get('to')
+
+  const weeklyTickFormatter = (value: string, index: number): string => {
+    if (!isWeek) return value
+    let bucket: any = data.monthly[index]
+    if (!bucket || bucket.label !== value) {
+      bucket = (data.monthly as any[]).find((b: any) => b.label === value)
+    }
+    const key: string | undefined = bucket?.key
+    if (!key || key.length !== 10) return value
+    const d = new Date(key + 'T00:00:00Z')
+    if (Number.isNaN(d.getTime())) return value
+    const curYear = new Date().getUTCFullYear()
+    const y = d.getUTCFullYear()
+    if (y !== curYear) {
+      const m = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+      const day = d.getUTCDate()
+      const yy = String(y).slice(-2)
+      return `${m} ${day} ’${yy}`
+    }
+    return value
+  }
+
+  const yearBoundaries: string[] = useMemo(() => {
+    if (!isWeek) return []
+    const out: string[] = []
+    for (let i = 1; i < data.monthly.length; i++) {
+      const prev: any = data.monthly[i - 1]
+      const cur: any = data.monthly[i]
+      const prevKey: string | undefined = prev?.key
+      const curKey: string | undefined = cur?.key
+      if (!prevKey || !curKey || prevKey.length !== 10 || curKey.length !== 10) continue
+      const prevYear = new Date(prevKey + 'T00:00:00Z').getUTCFullYear()
+      const curYear = new Date(curKey + 'T00:00:00Z').getUTCFullYear()
+      if (curYear !== prevYear) out.push(cur.label)
+    }
+    return out
+  }, [data.monthly, isWeek])
+
+  const handleBrushChange = (range: any) => {
+    if (!range) return
+    const { startIndex, endIndex } = range
+    if (startIndex == null || endIndex == null) return
+    if (startIndex === 0 && endIndex === data.monthly.length - 1) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('from')
+      next.delete('to')
+      setSearchParams(next, { replace: true })
+      return
+    }
+    const fromBucket: any = data.monthly[startIndex]
+    const toBucket: any = data.monthly[endIndex]
+    const fromKey = fromBucket?.key ?? fromBucket?.label
+    const toKey = toBucket?.key ?? toBucket?.label
+    const next = new URLSearchParams(searchParams)
+    if (fromKey) next.set('from', String(fromKey))
+    if (toKey) next.set('to', String(toKey))
+    setSearchParams(next, { replace: true })
+  }
+
+  const { highlightFrom, highlightTo } = useMemo(() => {
+    if (!fromParam || !toParam) return { highlightFrom: null as string | null, highlightTo: null as string | null }
+    let from = fromParam
+    let to = toParam
+    if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      const d = new Date(to + 'T00:00:00Z')
+      if (!Number.isNaN(d.getTime())) {
+        d.setUTCDate(d.getUTCDate() + 6)
+        to = d.toISOString().slice(0, 10)
+      }
+    } else if (/^\d{4}-\d{2}$/.test(to)) {
+      const [y, m] = to.split('-').map(Number)
+      const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+      to = last
+      if (/^\d{4}-\d{2}$/.test(from)) from = from + '-01'
+    }
+    if (/^\d{4}-\d{2}$/.test(from) && !/^\d{4}-\d{2}-\d{2}$/.test(from)) from = from + '-01'
+    return { highlightFrom: from, highlightTo: to }
+  }, [fromParam, toParam])
+
+  const hasBrush = data.monthly.length > 6
 
   return (
     <div className="flex flex-col gap-4">
@@ -261,26 +541,31 @@ function OverviewContent({
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-muted-foreground">Shipping trends</div>
-        <Tabs value={gran} onValueChange={(v) => onGranChange(v as 'week' | 'month')}>
-          <TabsList className="h-7">
-            <TabsTrigger value="month" className="px-3 py-1 text-xs">
-              Monthly
-            </TabsTrigger>
-            <TabsTrigger value="week" className="px-3 py-1 text-xs">
-              Weekly
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
+      <div className="rounded-lg rounded border bg-muted/30 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-semibold">Shipping trends</div>
+          <div className="flex items-center gap-2">
+            <Tabs value={gran} onValueChange={(v) => onGranChange(v as 'week' | 'month')}>
+              <TabsList className="h-7">
+                <TabsTrigger value="week" className="px-3 py-1 text-xs">
+                  Week
+                </TabsTrigger>
+                <TabsTrigger value="month" className="px-3 py-1 text-xs">
+                  Month
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">
+              {data.monthly.length} buckets
+            </span>
+          </div>
+        </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <SectionTitle>{`Merged pull requests ${periodLabel}`}</SectionTitle>
-            <span className="text-[11px] text-muted-foreground">{data.monthly.length} buckets</span>
-          </CardHeader>
+        <div className="grid grid-cols-1 gap-4 pt-3 lg:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-2">
+              <SectionTitle>{`Merged pull requests ${periodLabel}`}</SectionTitle>
+            </CardHeader>
           <CardContent>
             <ChartContainer config={mergedChartConfig} className="h-[300px]">
               <AreaChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
@@ -292,6 +577,7 @@ function OverviewContent({
                   tickMargin={8}
                   minTickGap={isWeek ? 24 : 16}
                   interval="preserveStartEnd"
+                  tickFormatter={weeklyTickFormatter}
                 />
                 <YAxis
                   tickLine={false}
@@ -306,6 +592,9 @@ function OverviewContent({
                     <ChartTooltipContent formatter={(value) => `${comma(Number(value))} PRs`} />
                   }
                 />
+                {yearBoundaries.map((x) => (
+                  <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                ))}
                 <Area
                   dataKey="merged"
                   type="natural"
@@ -314,15 +603,17 @@ function OverviewContent({
                   fill="var(--color-merged)"
                   fillOpacity={0.2}
                 />
+                {hasBrush ? (
+                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                ) : null}
               </AreaChart>
             </ChartContainer>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="pb-2">
             <SectionTitle>{`Lines changed ${periodLabel}`}</SectionTitle>
-            <span className="text-[11px] text-muted-foreground">{data.monthly.length} buckets</span>
           </CardHeader>
           <CardContent>
             <ChartContainer config={linesChartConfig} className="h-[300px]">
@@ -335,6 +626,7 @@ function OverviewContent({
                   tickMargin={8}
                   minTickGap={isWeek ? 24 : 16}
                   interval="preserveStartEnd"
+                  tickFormatter={weeklyTickFormatter}
                 />
                 <YAxis
                   tickLine={false}
@@ -344,16 +636,60 @@ function OverviewContent({
                   tickFormatter={(v) => compact(Number(v))}
                 />
                 <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<ChartTooltipContent />} />
+                {yearBoundaries.map((x) => (
+                  <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                ))}
                 <Bar dataKey="additions" stackId="lines" fill="var(--color-additions)" />
                 <Bar dataKey="deletions" stackId="lines" fill="var(--color-deletions)" />
                 <ChartLegend content={<ChartLegendContent />} />
+                {hasBrush ? (
+                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                ) : null}
               </BarChart>
             </ChartContainer>
           </CardContent>
         </Card>
+        </div>
       </div>
 
       <WhenWeShip data={data} />
+
+      {isWeek ? (
+        <p className="text-[11px] text-muted-foreground">Weekly buckets start Monday · Jan 1 marked · brush to highlight heatmap weeks via ?from=&to={fromParam && toParam ? ` (${fromParam} → ${toParam})` : ''}</p>
+      ) : null}
+      {fromParam && toParam ? (
+        <p className="text-[11px] text-muted-foreground">
+          Highlighting {fromParam} → {toParam}{' '}
+          <button
+            type="button"
+            onClick={() => {
+              const n = new URLSearchParams(searchParams)
+              n.delete('from')
+              n.delete('to')
+              setSearchParams(n, { replace: true })
+            }}
+            className="ml-1 text-xs text-primary hover:underline"
+          >
+            clear
+          </button>
+        </p>
+      ) : null}
+
+      {data.heatmap && data.heatmap.length > 0 ? (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <SectionTitle>Activity · 365d · {comma(data.heatmap.reduce((s, d) => s + d.merged, 0))} merges</SectionTitle>
+            {fromParam && toParam ? (
+              <span className="text-[11px] text-muted-foreground">
+                highlight {fromParam}→{toParam}
+              </span>
+            ) : null}
+          </CardHeader>
+          <CardContent>
+            <Heatmap dates={data.heatmap} highlightFrom={highlightFrom} highlightTo={highlightTo} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
@@ -438,15 +774,63 @@ function OverviewContent({
 }
 
 export default function OverviewPage() {
-  const [gran, setGran] = useState<'week' | 'month'>('month')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawGran = searchParams.get('gran')
+  const gran: 'week' | 'month' = rawGran === 'week' ? 'week' : 'month'
   const { data, loading, error, refetch } = useApi(() => getOverview({ largest: 15, gran }), [gran])
+  const isInitialLoading = loading && !data
+  const isReloading = loading && !!data
 
-  if (loading) return <Loading />
-  if (error) {
+  const handleGranChange = (v: 'week' | 'month') => {
+    const next = new URLSearchParams(searchParams)
+    next.set('gran', v)
+    setSearchParams(next)
+  }
+
+  if (isInitialLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <PageHeader title="Overview" description="Pull request activity across the organisation." />
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-border bg-border sm:grid-cols-4 xl:grid-cols-8">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex flex-col gap-2 bg-card px-3 py-3">
+              <Skeleton className="h-5 w-12" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="rounded-[6px]">
+              <CardContent className="p-3">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="mt-2 h-6 w-16" />
+                <Skeleton className="mt-1 h-3 w-32" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-7 w-36 rounded-md" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Skeleton className="h-[340px] w-full rounded-[6px]" />
+          <Skeleton className="h-[340px] w-full rounded-[6px]" />
+        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Skeleton className="h-36 w-full rounded-[6px]" />
+          <Skeleton className="h-36 w-full rounded-[6px]" />
+        </div>
+        <Skeleton className="h-[140px] w-full rounded-[6px]" />
+      </div>
+    )
+  }
+  if (error && !data) {
     return (
       <PageHeader title="Overview" description="Pull request activity across the organisation.">
         <EmptyState text={`Failed to load: ${error}`}>
-          <button onClick={refetch}>Try again</button>
+          <button onClick={refetch} className="text-sm text-primary hover:underline">Try again</button>
         </EmptyState>
       </PageHeader>
     )
@@ -460,11 +844,26 @@ export default function OverviewPage() {
   }
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Overview"
-        description={`Pull request activity across ${data.org}.`}
-      />
-      <OverviewContent data={data} gran={gran} onGranChange={setGran} />
+      <PageHeader title="Overview" description={`Pull request activity across ${data.org}.`} />
+      <div className="relative">
+        {isReloading && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center pt-6">
+            <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-xs font-medium shadow-sm">
+              <Loader2 className="size-3.5 animate-spin" />
+              Loading {gran} view...
+            </div>
+          </div>
+        )}
+        <div className={cn(isReloading && 'opacity-50 pointer-events-none transition-opacity', 'flex flex-col gap-4')} aria-busy={isReloading}>
+          <OverviewContent data={data} gran={gran} onGranChange={handleGranChange} />
+          {isReloading && (
+            <div className="grid gap-2">
+              <Skeleton className="h-2 w-full" />
+              <Skeleton className="h-2 w-3/4" />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

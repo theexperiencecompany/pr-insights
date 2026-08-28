@@ -6,13 +6,15 @@ import {
   AreaChart,
   Bar,
   BarChart,
+  Brush,
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceLine,
   XAxis,
   YAxis,
 } from 'recharts'
-import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, XCircle } from 'lucide-react'
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, Loader2, XCircle } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
 import { PageHeader } from '@/components/page-header'
@@ -391,6 +393,65 @@ export default function InsightsPage() {
     setSearchParams(next)
   }
 
+  // Weekly tickFormatter 'Jan 2 ’26' when year!=current + ReferenceLine Jan-1 helpers
+  const weeklyTickFormatter = (value: string, index: number): string => {
+    if (gran !== 'week') return value
+    let bucket: any = data?.ship[index]
+    if (!bucket || bucket.label !== value) {
+      bucket = (data?.ship as any[])?.find((b: any) => b.label === value)
+    }
+    const key: string | undefined = bucket?.key
+    if (!key || key.length !== 10) return value
+    const d = new Date(key + 'T00:00:00Z')
+    if (Number.isNaN(d.getTime())) return value
+    const curYear = new Date().getUTCFullYear()
+    const y = d.getUTCFullYear()
+    if (y !== curYear) {
+      const m = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+      const day = d.getUTCDate()
+      const yy = String(y).slice(-2)
+      return `${m} ${day} ’${yy}`
+    }
+    return value
+  }
+
+  const yearBoundaries = useMemo(() => {
+    if (gran !== 'week' || !data?.ship) return [] as string[]
+    const out: string[] = []
+    for (let i = 1; i < data.ship.length; i++) {
+      const prev: any = data.ship[i - 1]
+      const cur: any = data.ship[i]
+      const prevKey: string | undefined = prev?.key
+      const curKey: string | undefined = cur?.key
+      if (!prevKey || !curKey || prevKey.length !== 10 || curKey.length !== 10) continue
+      const prevYear = new Date(prevKey + 'T00:00:00Z').getUTCFullYear()
+      const curYear = new Date(curKey + 'T00:00:00Z').getUTCFullYear()
+      if (curYear !== prevYear) out.push(cur.label)
+    }
+    return out
+  }, [data, gran])
+
+  const handleShipBrushChange = (range: any) => {
+    if (!range) return
+    const { startIndex, endIndex } = range
+    if (startIndex == null || endIndex == null || !data?.ship) return
+    if (startIndex === 0 && endIndex === data.ship.length - 1) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('from')
+      next.delete('to')
+      setSearchParams(next, { replace: true })
+      return
+    }
+    const fromBucket: any = data.ship[startIndex]
+    const toBucket: any = data.ship[endIndex]
+    const fromKey = fromBucket?.key ?? fromBucket?.label
+    const toKey = toBucket?.key ?? toBucket?.label
+    const next = new URLSearchParams(searchParams)
+    if (fromKey) next.set('from', String(fromKey))
+    if (toKey) next.set('to', String(toKey))
+    setSearchParams(next, { replace: true })
+  }
+
   const linesData = useMemo(
     () => data?.ship.map((b) => ({ label: b.label, lines: b.additions + b.deletions })) ?? [],
     [data],
@@ -644,16 +705,56 @@ export default function InsightsPage() {
 
       {isInitialLoading ? (
         <div className="space-y-4">
+          <Skeleton className="h-[64px] w-full rounded-[6px]" />
+          <div className="grid gap-4 md:grid-cols-2">
+            <Skeleton className="h-[300px] w-full rounded-[6px]" />
+            <Skeleton className="h-[300px] w-full rounded-[6px]" />
+          </div>
           <Skeleton className="h-[300px] w-full rounded-[6px]" />
           <Skeleton className="h-[300px] w-full rounded-[6px]" />
-          <Skeleton className="h-[300px] w-full rounded-[6px]" />
+          <div className="grid gap-4 md:grid-cols-2">
+            <Skeleton className="h-[300px] w-full rounded-[6px]" />
+            <Skeleton className="h-[300px] w-full rounded-[6px]" />
+          </div>
+          <Skeleton className="h-[220px] w-full rounded-[6px]" />
         </div>
       ) : error && !data ? (
         <EmptyState text={error} />
       ) : data ? (
-        <div className={cn(isReloading && 'opacity-50 transition-opacity')}>
-        <>
+        <div className="relative">
+          {isReloading && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center pt-6">
+              <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-xs font-medium shadow-sm">
+                <Loader2 className="size-3.5 animate-spin" />
+                Loading {gran} view...
+              </div>
+            </div>
+          )}
+          <div className={cn(isReloading && 'opacity-50 pointer-events-none transition-opacity')} aria-busy={isReloading}>
+            {isReloading && (
+              <div className="mb-3 flex items-center gap-2">
+                <Skeleton className="h-2 w-full" />
+              </div>
+            )}
+            <>
           <SectionHeading>Shipping</SectionHeading>
+          {searchParams.get('from') && searchParams.get('to') ? (
+            <div className="mt-2 text-[11px] text-muted-foreground">
+              Highlighting {searchParams.get('from')} → {searchParams.get('to')}{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  const n = new URLSearchParams(searchParams)
+                  n.delete('from')
+                  n.delete('to')
+                  setSearchParams(n, { replace: true })
+                }}
+                className="ml-1 text-xs text-primary hover:underline"
+              >
+                clear
+              </button>
+            </div>
+          ) : null}
 
           {data.ship.length === 0 ? (
             <Card className="mt-4">
@@ -678,8 +779,12 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
+                      {yearBoundaries.map((x) => (
+                        <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                      ))}
                       <ChartTooltip content={<SeriesTip />} />
                       <ChartLegend content={<ToggleLegend hiddenSeries={hidden} onToggleSeries={toggleSeries} />} />
                       <Area
@@ -733,6 +838,9 @@ export default function InsightsPage() {
                           style={{ opacity: 0.6 } as React.CSSProperties}
                         />
                       )}
+                      {data && data.ship.length > 6 ? (
+                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                      ) : null}
                     </AreaChart>
                   </ChartContainer>
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -775,8 +883,12 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
+                      {yearBoundaries.map((x) => (
+                        <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                      ))}
                       <ChartTooltip content={<SeriesTip />} />
                       <Area
                         type="monotone"
@@ -786,6 +898,9 @@ export default function InsightsPage() {
                         fill="url(#fillLines)"
                         activeDot={{ r: 4 }}
                       />
+                      {data && data.ship.length > 6 ? (
+                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                      ) : null}
                     </AreaChart>
                   </ChartContainer>
                 </ChartCard>
@@ -802,12 +917,16 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis
                         tickLine={false}
                         axisLine={false}
                         tickFormatter={(v: number) => `${v}d`}
                       />
+                      {yearBoundaries.map((x) => (
+                        <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                      ))}
                       <ChartTooltip content={<SeriesTip />} />
                       <Line
                         type="monotone"
@@ -818,6 +937,9 @@ export default function InsightsPage() {
                         dot={false}
                         activeDot={{ r: 4 }}
                       />
+                      {data && data.ship.length > 6 ? (
+                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                      ) : null}
                     </LineChart>
                   </ChartContainer>
                 </ChartCard>
@@ -834,12 +956,16 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis
                         tickLine={false}
                         axisLine={false}
                         tickFormatter={(v: number) => compact(Number(v))}
                       />
+                      {yearBoundaries.map((x) => (
+                        <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
+                      ))}
                       <ChartTooltip
                         content={
                           <ChartTooltipContent
@@ -857,6 +983,9 @@ export default function InsightsPage() {
                         fillOpacity={0.15}
                         activeDot={{ r: 4 }}
                       />
+                      {data && data.ship.length > 6 ? (
+                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                      ) : null}
                     </AreaChart>
                   </ChartContainer>
                 </ChartCard>
@@ -904,6 +1033,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
                       <ChartTooltip content={<CiTip hidden={hidden} />} />
@@ -944,6 +1074,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis
                         domain={[0, 100]}
@@ -977,6 +1108,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis
                         tickLine={false}
@@ -1011,6 +1143,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickMargin={8}
                         minTickGap={24}
+                        tickFormatter={weeklyTickFormatter}
                       />
                       <YAxis
                         tickLine={false}
@@ -1343,7 +1476,8 @@ export default function InsightsPage() {
               ) : null}
             </>
           )}
-        </>
+            </>
+          </div>
         </div>
       ) : null}
     </>
