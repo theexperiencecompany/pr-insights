@@ -539,8 +539,8 @@ func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucke
 	out := make([]CIBucket, 0, len(order))
 	for _, k := range order {
 		b := byKey[k]
-		if b.Total > 0 {
-			b.SuccessRate = float64(b.Success) / float64(b.Total) * 100
+		if denom := b.Success + b.Failure; denom > 0 {
+			b.SuccessRate = float64(b.Success) / float64(denom) * 100
 		}
 		if d := durations[k]; len(d) > 0 {
 			b.MedianDurationMin = medianFloat(d)
@@ -556,6 +556,8 @@ type WorkflowStat struct {
 	Workflow           string     `json:"workflow"`
 	Runs               int        `json:"runs"`
 	Success            int        `json:"success"`
+	Failure            int        `json:"failure"`
+	Other              int        `json:"other"`
 	SuccessRate        float64    `json:"successRate"`
 	MedianDurationMin  float64    `json:"medianDurationMin"`
 	LongestDurationMin float64    `json:"longestDurationMin"`
@@ -573,6 +575,7 @@ func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
 	type monthly struct {
 		total   int
 		success int
+		failure int
 	}
 	monthlyByWF := make(map[string]map[string]*monthly)
 
@@ -592,8 +595,13 @@ func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
 			order = append(order, key)
 		}
 		st.Runs++
-		if r.Conclusion == "success" {
+		switch r.Conclusion {
+		case "success":
 			st.Success++
+		case "failure":
+			st.Failure++
+		default:
+			st.Other++
 		}
 		if r.Conclusion == "success" || r.Conclusion == "failure" {
 			durations[key] = append(durations[key], float64(r.DurationSec)/60)
@@ -621,16 +629,19 @@ func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
 			mb[monthKey] = m
 		}
 		m.total++
-		if r.Conclusion == "success" {
+		switch r.Conclusion {
+		case "success":
 			m.success++
+		case "failure":
+			m.failure++
 		}
 	}
 
 	out := make([]WorkflowStat, 0, len(idx))
 	for _, k := range order {
 		st := idx[k]
-		if st.Runs > 0 {
-			st.SuccessRate = float64(st.Success) / float64(st.Runs) * 100
+		if denom := st.Success + st.Failure; denom > 0 {
+			st.SuccessRate = float64(st.Success) / float64(denom) * 100
 		}
 		if d := durations[k]; len(d) > 0 {
 			st.MedianDurationMin = medianFloat(d)
@@ -640,8 +651,12 @@ func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
 		mb := monthlyByWF[k]
 		for i := 5; i >= 0; i-- {
 			mk := now.AddDate(0, -i, 0).Format("2006-01")
-			if m := mb[mk]; m != nil && m.total > 0 {
-				st.Trend = append(st.Trend, float64(m.success)/float64(m.total)*100)
+			if m := mb[mk]; m != nil {
+				if denom := m.success + m.failure; denom > 0 {
+					st.Trend = append(st.Trend, float64(m.success)/float64(denom)*100)
+				} else {
+					st.Trend = append(st.Trend, -1)
+				}
 			} else {
 				st.Trend = append(st.Trend, -1) // no runs that month
 			}

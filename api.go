@@ -283,17 +283,18 @@ func computeInsights(snap Data, repo, period string, gran Granularity) apiInsigh
 	ci := CISeries(snap.Runs, repo, gran, since)
 	workflows := WorkflowStats(snap.Runs, repo, since)
 
-	var ciTotal, ciSuccess, ciWorkflows int
+	var ciTotal, ciSuccess, ciFailure, ciWorkflows int
 	var ciDur []float64
 	for _, wf := range workflows {
 		ciTotal += wf.Runs
 		ciSuccess += wf.Success
+		ciFailure += wf.Failure
 		ciWorkflows++
 		ciDur = append(ciDur, wf.MedianDurationMin)
 	}
 	ciRate := 0.0
-	if ciTotal > 0 {
-		ciRate = float64(ciSuccess) / float64(ciTotal) * 100
+	if denom := ciSuccess + ciFailure; denom > 0 {
+		ciRate = float64(ciSuccess) / float64(denom) * 100
 	}
 
 	return apiInsights{

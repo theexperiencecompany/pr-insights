@@ -15,7 +15,6 @@ import {
 import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, XCircle } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
-import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
 import { StatCard } from '@/components/stat-card'
 import { getInsights, getStatus, getWorkflowRuns, type WorkflowRun, type WorkflowStat } from '@/lib/api'
@@ -24,6 +23,7 @@ import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   ChartContainer,
   ChartLegend,
@@ -65,6 +65,20 @@ const shipConfig = {
   lines: { label: 'Lines', color: 'var(--chart-2)' },
   cycle: { label: 'Cycle time', color: 'var(--chart-4)' },
 } satisfies ChartConfig
+
+// Locked palette for the "Pull requests merged" chart:
+//  --chart-1 solid fill  → Merged (area)
+//  --chart-5 solid thin  → MA trailing mean (5wk / 3mo window)
+//  --chart-3 dashed 4/4  → Last year
+//  --chart-1 dashed 6/3 dimmed → Forecast (gated, not a prediction)
+const mergedConfig = {
+  merged: { label: 'Merged', color: 'var(--chart-1)' },
+  ma: { label: 'MA', color: 'var(--chart-5)' },
+  prev: { label: 'Last year', color: 'var(--chart-3)' },
+  forecast: { label: 'Forecast', color: 'var(--chart-1)' },
+} satisfies ChartConfig
+
+const FORECAST_STORAGE_KEY = 'pr-insights-show-forecast'
 
 const ciConfig = {
   success: { label: 'Success', color: 'var(--chart-2)' },
@@ -239,6 +253,8 @@ function ToggleLegend({
         .map((item) => {
           const key = String(item.dataKey)
           const inactive = Boolean(hiddenSeries[key])
+          const isDashed = key === 'prev' || key === 'forecast'
+          const isDimmed = key === 'forecast'
           return (
             <button
               key={key}
@@ -250,10 +266,21 @@ function ToggleLegend({
                 inactive && 'opacity-50',
               )}
             >
-              <span
-                className="size-2 shrink-0 rounded-[2px]"
-                style={{ backgroundColor: item.color }}
-              />
+              {isDashed ? (
+                <span
+                  className="h-0 w-3 shrink-0 border-t-2"
+                  style={{
+                    borderColor: item.color,
+                    borderStyle: 'dashed',
+                    opacity: isDimmed ? 0.6 : 1,
+                  }}
+                />
+              ) : (
+                <span
+                  className="size-2 shrink-0 rounded-[2px]"
+                  style={{ backgroundColor: item.color, opacity: isDimmed ? 0.6 : 1 }}
+                />
+              )}
               <span className="text-muted-foreground">{item.value}</span>
             </button>
           )
@@ -336,9 +363,26 @@ export default function InsightsPage() {
   const gran: Gran = GRANS.includes(rawGran as Gran) ? (rawGran as Gran) : 'month'
 
   const { data, loading, error } = useApi(() => getInsights({ period, gran }), [period, gran])
+  const isInitialLoading = loading && !data
+  const isReloading = loading && !!data
   const { data: status } = useApi(getStatus)
 
   const [hidden, setHidden] = useState<Record<string, boolean>>({})
+  const [showForecast, setShowForecast] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(FORECAST_STORAGE_KEY)
+      return v === 'true'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(FORECAST_STORAGE_KEY, String(showForecast))
+    } catch {
+      // storage unavailable
+    }
+  }, [showForecast])
 
   const updateParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams)
@@ -358,6 +402,8 @@ export default function InsightsPage() {
   )
 
   // merged chart data: merged + moving average + year-ago + forecast extension
+  // Tokens locked: merged --chart-1 solid fill, MA --chart-5 solid thin (trailing 5wk/3mo), prev --chart-3 dashed 4/4, forecast --chart-1 dashed 6/3 dimmed.
+  // Forecast is gated: only when n>=6 and user has toggled it ON (default OFF, persisted).
   const mergedData = useMemo(() => {
     if (!data) return []
     const window = gran === 'week' ? 5 : 3
@@ -372,29 +418,31 @@ export default function InsightsPage() {
         rows[i].prev = b.merged
       })
     }
-    // least-squares forecast over merged, anchored to the last real point
-    const ys = rows.map((r) => r.merged ?? 0)
-    const n = ys.length
-    if (n >= 4) {
-      const meanX = (n - 1) / 2
-      const meanY = ys.reduce((s, v) => s + v, 0) / n
-      let num = 0
-      let den = 0
-      ys.forEach((y, x) => {
-        num += (x - meanX) * (y - meanY)
-        den += (x - meanX) * (x - meanX)
-      })
-      const slope = den > 0 ? num / den : 0
-      const intercept = meanY - slope * meanX
-      // anchor: the forecast line starts exactly where the data ends
-      rows[n - 1].forecast = rows[n - 1].merged
-      for (let k = 1; k <= 3; k++) {
-        const x = n - 1 + k
-        rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: Math.max(0, slope * x + intercept) })
+    // least-squares forecast over merged, anchored to the last real point — gated n>=6 and explicit opt-in
+    if (showForecast) {
+      const ys = rows.map((r) => r.merged ?? 0)
+      const n = ys.length
+      if (n >= 6) {
+        const meanX = (n - 1) / 2
+        const meanY = ys.reduce((s, v) => s + v, 0) / n
+        let num = 0
+        let den = 0
+        ys.forEach((y, x) => {
+          num += (x - meanX) * (y - meanY)
+          den += (x - meanX) * (x - meanX)
+        })
+        const slope = den > 0 ? num / den : 0
+        const intercept = meanY - slope * meanX
+        // anchor: the forecast line starts exactly where the data ends
+        rows[n - 1].forecast = rows[n - 1].merged
+        for (let k = 1; k <= 3; k++) {
+          const x = n - 1 + k
+          rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: Math.max(0, slope * x + intercept) })
+        }
       }
     }
     return rows
-  }, [data, gran])
+  }, [data, gran, showForecast])
 
   const cumulativeData = useMemo(
     () => {
@@ -419,24 +467,51 @@ export default function InsightsPage() {
     dir: 'desc',
   })
 
-  // Workflow hide preferences, persisted locally. Defaults: hide the bot CI
-  // noise (Claude Code / Claude Code Review / Code Quality) and one-off runs.
+  // Workflow hide preferences: URL ?hide=&hideOneOffs=0 is source of truth, localStorage fallback.
+  // Default is show-all (honest) — hidden prefs dim rows and show banner "X workflows hidden — may hide failures".
   const PREFS_KEY = 'pr-insights-workflow-prefs'
   const DEFAULT_HIDDEN = ['Claude Code', 'Claude Code Review', 'Code Quality']
+  void DEFAULT_HIDDEN
+  const parseHideParam = (val: string | null): string[] | null => {
+    if (val === null) return null
+    if (val === '') return []
+    return val
+      .split(',')
+      .map((s) => {
+        try {
+          return decodeURIComponent(s.trim())
+        } catch {
+          return s.trim()
+        }
+      })
+      .filter(Boolean)
+  }
+  const parseHideOneOffsParam = (val: string | null): boolean | null => {
+    if (val === null) return null
+    return val === '1' || val.toLowerCase() === 'true'
+  }
   const [wfPrefs, setWfPrefs] = useState<{ hidden: string[]; hideOneOffs: boolean }>(() => {
+    const hideFromUrl = parseHideParam(searchParams.get('hide'))
+    const hideOneOffsFromUrl = parseHideOneOffsParam(searchParams.get('hideOneOffs'))
+    if (hideFromUrl !== null || hideOneOffsFromUrl !== null) {
+      return {
+        hidden: hideFromUrl ?? [],
+        hideOneOffs: hideOneOffsFromUrl ?? false,
+      }
+    }
     try {
       const raw = localStorage.getItem(PREFS_KEY)
       if (raw) {
         const p = JSON.parse(raw) as { hidden?: unknown; hideOneOffs?: unknown }
         return {
           hidden: Array.isArray(p.hidden) ? p.hidden.filter((x): x is string => typeof x === 'string') : [],
-          hideOneOffs: p.hideOneOffs !== false,
+          hideOneOffs: p.hideOneOffs === true || p.hideOneOffs === 'true' || p.hideOneOffs === 1,
         }
       }
     } catch {
       // ignore malformed prefs
     }
-    return { hidden: DEFAULT_HIDDEN, hideOneOffs: true }
+    return { hidden: [], hideOneOffs: false }
   })
   useEffect(() => {
     try {
@@ -444,7 +519,16 @@ export default function InsightsPage() {
     } catch {
       // storage unavailable — prefs just don't persist
     }
-  }, [wfPrefs])
+    const next = new URLSearchParams(searchParams)
+    if (wfPrefs.hidden.length > 0) next.set('hide', wfPrefs.hidden.map(encodeURIComponent).join(','))
+    else next.set('hide', '')
+    next.set('hideOneOffs', wfPrefs.hideOneOffs ? '1' : '0')
+    const curHide = searchParams.get('hide')
+    const curOneOff = searchParams.get('hideOneOffs')
+    if (curHide !== next.get('hide') || curOneOff !== next.get('hideOneOffs')) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [wfPrefs, searchParams, setSearchParams])
 
   // Expandable per-workflow run drill-down.
   const [expandedWf, setExpandedWf] = useState<string | null>(null)
@@ -505,22 +589,22 @@ export default function InsightsPage() {
     return rows
   }, [data, wfSort])
 
-  const filteredWorkflows = useMemo(
-    () =>
-      sortedWorkflows.filter((wf) => {
-        const hidden = wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow)
-        return !hidden && !(wfPrefs.hideOneOffs && wf.runs <= 1)
-      }),
-    [sortedWorkflows, wfPrefs],
-  )
-  const visibleWorkflows = showAllWorkflows ? filteredWorkflows : filteredWorkflows.slice(0, 8)
+  const isWorkflowHidden = (wf: WorkflowStat) =>
+    wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow)
+  const isOneOffHidden = (wf: WorkflowStat) => wfPrefs.hideOneOffs && wf.runs <= 1
+
   const hiddenWorkflows = useMemo(
-    () =>
-      sortedWorkflows.filter(
-        (wf) => wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow),
-      ),
+    () => sortedWorkflows.filter(isWorkflowHidden),
     [sortedWorkflows, wfPrefs],
   )
+  const hiddenCount = wfPrefs.hidden.length
+  // oneOffCount kept for potential banner augmentation
+  const oneOffCount = useMemo(() => sortedWorkflows.filter((wf) => wf.runs <= 1).length, [sortedWorkflows])
+  void oneOffCount
+
+  // Default show-all: all workflows are shown, hidden/one-off are dimmed not removed (honest).
+  const filteredWorkflows = useMemo(() => sortedWorkflows, [sortedWorkflows])
+  const visibleWorkflows = showAllWorkflows ? filteredWorkflows : filteredWorkflows.slice(0, 8)
 
   const toggleSeries = (key: string) => setHidden((h) => ({ ...h, [key]: !h[key] }))
 
@@ -558,11 +642,16 @@ export default function InsightsPage() {
         </Filter>
       </div>
 
-      {loading ? (
-        <Loading />
-      ) : error ? (
+      {isInitialLoading ? (
+        <div className="space-y-4">
+          <Skeleton className="h-[300px] w-full rounded-[6px]" />
+          <Skeleton className="h-[300px] w-full rounded-[6px]" />
+          <Skeleton className="h-[300px] w-full rounded-[6px]" />
+        </div>
+      ) : error && !data ? (
         <EmptyState text={error} />
       ) : data ? (
+        <div className={cn(isReloading && 'opacity-50 transition-opacity')}>
         <>
           <SectionHeading>Shipping</SectionHeading>
 
@@ -574,7 +663,7 @@ export default function InsightsPage() {
             <>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <ChartCard title="Pull requests merged">
-                  <ChartContainer config={shipConfig} className="aspect-auto h-64">
+                  <ChartContainer config={mergedConfig} className="aspect-auto h-64">
                     <AreaChart data={mergedData} margin={{ left: 0, right: 8, top: 4 }}>
                       <defs>
                         <linearGradient id="fillMerged" x1="0" y1="0" x2="0" y2="1">
@@ -592,52 +681,79 @@ export default function InsightsPage() {
                       />
                       <YAxis tickLine={false} axisLine={false} tickFormatter={compact} />
                       <ChartTooltip content={<SeriesTip />} />
+                      <ChartLegend content={<ToggleLegend hiddenSeries={hidden} onToggleSeries={toggleSeries} />} />
+                      <Area
+                        type="monotone"
+                        dataKey="merged"
+                        name="Merged"
+                        stroke="var(--color-merged)"
+                        strokeWidth={2}
+                        fill="url(#fillMerged)"
+                        activeDot={{ r: 4 }}
+                        hide={Boolean(hidden.merged)}
+                      />
+                      <Line
+                        type="monotone"
+                        isAnimationActive={false}
+                        dataKey="ma"
+                        name="MA"
+                        stroke="var(--color-ma)"
+                        strokeWidth={1.5}
+                        dot={false}
+                        activeDot={false}
+                        hide={Boolean(hidden.ma)}
+                      />
                       {mergedData.some((r) => r.prev !== null) && (
                         <Line
                           type="monotone"
                           isAnimationActive={false}
                           dataKey="prev"
                           name="Last year"
-                          stroke="var(--chart-5)"
+                          stroke="var(--color-prev)"
                           strokeWidth={1.5}
                           strokeDasharray="4 4"
                           dot={false}
                           activeDot={false}
+                          hide={Boolean(hidden.prev)}
                         />
                       )}
-                      <Area
-                        type="monotone"
-                        dataKey="merged"
-                        stroke="var(--color-merged)"
-                        strokeWidth={2}
-                        fill="url(#fillMerged)"
-                        activeDot={{ r: 4 }}
-                      />
-                      <Line
-                        type="monotone"
-                        isAnimationActive={false}
-                        dataKey="ma"
-                        name="Moving average"
-                        stroke="var(--chart-5)"
-                        strokeWidth={1.5}
-                        dot={false}
-                        activeDot={false}
-                      />
-                      <Line
-                        type="monotone"
-                        isAnimationActive={false}
-                        dataKey="forecast"
-                        name="Forecast"
-                        stroke="var(--chart-1)"
-                        strokeWidth={1.5}
-                        strokeDasharray="6 3"
-                        dot={false}
-                        activeDot={false}
-                      />
+                      {showForecast && mergedData.some((r) => r.forecast !== null) && (
+                        <Line
+                          type="monotone"
+                          isAnimationActive={false}
+                          dataKey="forecast"
+                          name="Forecast"
+                          stroke="var(--color-forecast)"
+                          strokeWidth={1.5}
+                          strokeDasharray="6 3"
+                          strokeOpacity={0.6}
+                          dot={false}
+                          activeDot={false}
+                          hide={Boolean(hidden.forecast)}
+                          style={{ opacity: 0.6 } as React.CSSProperties}
+                        />
+                      )}
                     </AreaChart>
                   </ChartContainer>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      MA=trailing mean · Forecast=linear extrap +1..+3 — not a prediction
+                      {gran === 'week' ? ' · MA window 5wk' : ' · MA window 3mo'}
+                    </p>
+                    <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={showForecast}
+                        onChange={(e) => setShowForecast(e.target.checked)}
+                        disabled={(data?.ship.length ?? 0) < 6}
+                        className="size-3.5 accent-[var(--chart-1)] disabled:opacity-50"
+                      />
+                      Show forecast
+                      {(data?.ship.length ?? 0) < 6 ? ' (needs ≥6 points)' : ''}
+                    </label>
+                  </div>
                   {period !== '12m' && (
-                    <p className="mt-2 text-[11px] text-muted-foreground">
+                    <p className="mt-1 text-[11px] text-muted-foreground">
                       Switch to Last 12 months to compare year-over-year.
                     </p>
                   )}
@@ -916,11 +1032,16 @@ export default function InsightsPage() {
                 </ChartCard>
               </div>
 
+              {hiddenCount > 0 ? (
+                <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  {hiddenCount} workflows hidden — may hide failures
+                </div>
+              ) : null}
               <ChartCard title="Workflows" className="mt-4">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
                   <p className="text-xs text-muted-foreground">
                     {filteredWorkflows.length} of {data.workflows.length} workflows shown
-                    {wfPrefs.hidden.length > 0 ? ` · ${wfPrefs.hidden.length} hidden` : ''}
+                    {hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}
                   </p>
                   <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-muted-foreground">
                     <input
@@ -932,6 +1053,58 @@ export default function InsightsPage() {
                     Hide one-off runs (single run)
                   </label>
                 </div>
+                {(hiddenCount > 0 || wfPrefs.hideOneOffs) && (
+                  <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+                    <span className="text-xs font-medium">Active filters:</span>
+                    {wfPrefs.hidden.map((h) => (
+                      <span
+                        key={h}
+                        className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium"
+                      >
+                        {h}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setWfPrefs((p) => ({ ...p, hidden: p.hidden.filter((x) => x !== h) }))
+                          }
+                          className="ml-1 rounded-full p-0.5 hover:bg-background"
+                          aria-label={`Remove ${h} filter`}
+                        >
+                          <XCircle className="size-3" />
+                        </button>
+                      </span>
+                    ))}
+                    {wfPrefs.hideOneOffs ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium">
+                        One-offs
+                        <button
+                          type="button"
+                          onClick={() => setWfPrefs((p) => ({ ...p, hideOneOffs: false }))}
+                          className="ml-1 rounded-full p-0.5 hover:bg-background"
+                          aria-label="Remove one-offs filter"
+                        >
+                          <XCircle className="size-3" />
+                        </button>
+                      </span>
+                    ) : null}
+                    <div className="ml-auto flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setWfPrefs({ hidden: [], hideOneOffs: false })}
+                        className="rounded px-2 py-1 text-xs font-medium hover:bg-muted"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWfPrefs((p) => ({ ...p, hidden: [] }))}
+                        className="rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted"
+                      >
+                        Unhide all
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -956,7 +1129,12 @@ export default function InsightsPage() {
                       const runs = wfRuns[key]
                       return (
                         <Fragment key={key}>
-                          <TableRow className="group">
+                          <TableRow
+                            className={cn(
+                              'group',
+                              (isWorkflowHidden(wf) || isOneOffHidden(wf)) && 'opacity-60',
+                            )}
+                          >
                             <TableCell>
                               <div className="flex items-center gap-0.5">
                                 <button
@@ -974,7 +1152,7 @@ export default function InsightsPage() {
                                 <button
                                   type="button"
                                   onClick={() => toggleHidden(wf)}
-                                  className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                                  className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                                   title="Hide this workflow"
                                 >
                                   <EyeOff className="size-4" />
@@ -1012,7 +1190,7 @@ export default function InsightsPage() {
                             <TableCell
                               className={cn(
                                 'text-right tabular-nums',
-                                wf.successRate >= 90 ? 'text-chart-2' : wf.successRate >= 50 ? 'text-amber-500' : 'text-chart-3',
+                                wf.successRate >= 95 ? 'text-chart-2' : wf.successRate >= 80 ? 'text-amber-500' : 'text-chart-3',
                               )}
                             >
                               {wf.successRate.toFixed(1)}%
@@ -1031,9 +1209,9 @@ export default function InsightsPage() {
                                       'size-2 rounded-full',
                                       v < 0
                                         ? 'bg-muted'
-                                        : v >= 90
+                                        : v >= 95
                                           ? 'bg-chart-2'
-                                          : v >= 50
+                                          : v >= 80
                                             ? 'bg-amber-500'
                                             : 'bg-chart-3',
                                     )}
@@ -1166,6 +1344,7 @@ export default function InsightsPage() {
             </>
           )}
         </>
+        </div>
       ) : null}
     </>
   )
