@@ -214,9 +214,12 @@ export default function CIPage() {
         case 'runs': return dir * (a.runs - b.runs)
         case 'p50': return dir * (a.p50Min - b.p50Min)
         case 'p90': return dir * (a.p90Min - b.p90Min)
+        case 'p95': return dir * ((a as any).p95Min - (b as any).p95Min)
         case 'p99': return dir * (a.p99Min - b.p99Min)
         case 'successRate': return dir * (a.successRate - b.successRate)
         case 'flake': return dir * (a.flakeScore - b.flakeScore)
+        case 'mttr': return dir * (((a as any).mttrMedianMin ?? 0) - ((b as any).mttrMedianMin ?? 0))
+        case 'wasted': return dir * (((a as any).wastedMinutes ?? 0) - ((b as any).wastedMinutes ?? 0))
         case 'queue': return dir * (a.queueMedianMin - b.queueMedianMin)
         case 'budget': return dir * (a.budgetSharePct - b.budgetSharePct)
         case 'delta': return dir * (a.deltaMin - b.deltaMin)
@@ -261,6 +264,7 @@ export default function CIPage() {
   }
 
   const org = status?.org
+  void org
 
   return (
     <TooltipProvider>
@@ -371,12 +375,14 @@ export default function CIPage() {
               <Card className="rounded-[6px]">
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Total cost</span>
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Total cost · cost per merge</span>
                     <Clock3 className="size-3.5 text-muted-foreground" />
                   </div>
-                  <div className="mt-1 text-2xl font-semibold tabular-nums">{comma(data.totalMinutes)} <span className="text-sm font-normal text-muted-foreground">min</span></div>
-                  <div className="mt-1 text-xs text-muted-foreground">{data.totalRuns} runs · {data.totalMinutes > 60 ? `${(data.totalMinutes/60).toFixed(1)} hrs` : `${data.totalMinutes} min`} · approx cost @{org ? `${org}/gaia` : ''}</div>
-                  <div className="mt-1 text-[11px] text-muted-foreground">Budget share per workflow in table ↓ · p99 tail drives cost</div>
+                  <div className="mt-1 text-2xl font-semibold tabular-nums">{comma(data.totalMinutes)} <span className="text-sm font-normal text-muted-foreground">min</span> <span className="text-base font-normal text-muted-foreground">· {(data as any).costPerMerge ? `${((data as any).costPerMerge.perMergeMin ?? 0) > 0 ? fmtDuration((data as any).costPerMerge.perMergeMin) + ' / merge' : '— / merge'}` : ''}</span></div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {data.totalRuns} runs · {data.totalMinutes > 60 ? `${(data.totalMinutes/60).toFixed(1)} hrs` : `${data.totalMinutes} min`} · {(data as any).costPerMerge?.merged ? `${(data as any).costPerMerge.merged} merges` : 'no merges in window'} · {(data as any).globalWastedMinutes != null ? `waste ${comma((data as any).globalWastedMinutes)} min (${((data as any).globalWastedPct ?? 0).toFixed(0)}%)` : ''}
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">Budget share per workflow in table ↓ · p99 tail drives cost · cost = totalMinutes / merges</div>
                 </CardContent>
               </Card>
 
@@ -511,6 +517,54 @@ export default function CIPage() {
               </Card>
             </div>
 
+            {/* Needs Attention — FLAKY full */}
+            {(() => {
+              const needs = (data as any).needsAttention as WorkflowHybrid[] | undefined
+              const hasNeeds = Array.isArray(needs) && needs.length > 0
+              return (
+                <Card className={hasNeeds ? "mt-4 rounded-[6px] border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/10" : "mt-4 rounded-[6px]"} role="region" aria-label="Workflows needing attention">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                        <span className={hasNeeds ? "size-2.5 rounded-full bg-amber-500" : "size-2.5 rounded-full bg-green-500"} aria-hidden />
+                        Needs attention
+                        {hasNeeds ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">{needs!.length}</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-200">0</Badge>}
+                      </CardTitle>
+                      <span className="text-[11px] text-muted-foreground">flaky ≥15% · fail ≥20% · MTTR ≥2h · waste ≥25% · n≥10</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{hasNeeds ? `${needs!.length} of ${data.workflows.length} workflows need attention — honest, not auto-hidden. Flaky = failure→success within 24h / failures.` : "All stable — no workflow meets attention threshold (flake ≥15%, fail ≥20%, MTTR ≥2h, waste ≥25%)."}</p>
+                  </CardHeader>
+                  <CardContent>
+                    {hasNeeds ? (
+                      <div className="space-y-2">
+                        {needs!.map((w) => {
+                          const flakeRed = w.flakeScore >= 30
+                          const flakeAmber = !flakeRed && w.flakeScore >= 15
+                          const failRed = w.failureRate >= 20
+                          const mttrWarn = w.mttrMedianMin >= 120
+                          return (
+                            <div key={w.key} className="flex flex-wrap items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs">
+                              <span className="font-medium truncate max-w-[160px]" title={w.workflow}>{w.workflow}</span>
+                              <span className="text-muted-foreground truncate max-w-[100px]" title={w.repo}>{w.repo}</span>
+                              <HostingPill hosting={w.hosting} />
+                              <Badge variant={flakeRed ? "destructive" : flakeAmber ? "secondary" : "outline"} className={flakeRed ? "px-1.5 py-0 text-[10px]" : flakeAmber ? "px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" : "px-1.5 py-0 text-[10px]"}>flake {w.flakeScore.toFixed(1)}%{w.flaky ? ` (${w.flaky})` : ''}</Badge>
+                              <Badge variant={failRed ? "destructive" : "outline"} className="px-1.5 py-0 text-[10px]">fail {w.failureRate.toFixed(1)}% · {w.successRate.toFixed(0)}% success</Badge>
+                              <span className="tabular-nums">p50 {fmtDuration(w.p50Min)} · p90 {fmtDuration(w.p90Min)}{w.p95Min ? ` · p95 ${fmtDuration(w.p95Min)}` : ''}</span>
+                              <span className={mttrWarn ? "text-amber-600 dark:text-amber-400 tabular-nums" : "tabular-nums text-muted-foreground"}>MTTR {w.mttrMedianMin ? fmtDuration(w.mttrMedianMin) : '—'}{w.mttrCount ? ` · n=${w.mttrCount}` : ''}</span>
+                              <span className={w.wastedPct >= 25 ? "text-red-600 dark:text-red-400 tabular-nums" : "tabular-nums text-muted-foreground"}>waste {comma(w.wastedMinutes)} min ({w.wastedPct.toFixed(0)}%)</span>
+                              <span className="ml-auto text-[11px] text-muted-foreground">{w.runs} runs · {w.budgetSharePct.toFixed(1)}% budget · queue {w.queueMedianMin ? fmtDuration(w.queueMedianMin) : '—'}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">Thresholds are one-line tuning in api.go (needs: flake 15, fail 20, MTTR 120, waste 25%). All workflows below thresholds in this period.</div>
+                    )}
+                  </CardContent>
+                </Card>
+              )
+            })()}
+
             {/* Per-workflow big-number strip (slow-first 6) */}
             <div className="mt-6">
               <div className="flex items-center justify-between">
@@ -536,7 +590,12 @@ export default function CIPage() {
                           <span className="text-sm font-normal text-muted-foreground">p50 · p90 {wf.p90Min.toFixed(1)}m</span>
                           <span className="ml-auto"><ThresholdBadge p50={wf.p50Min} p90={wf.p90Min} successRate={wf.successRate} /></span>
                         </div>
-                        <div className="mt-1 text-xs text-muted-foreground">avg {fmtDuration(wf.avgMin)} · p99 {fmtDuration(wf.p99Min)} · queue {wf.queueMedianMin ? fmtDuration(wf.queueMedianMin) : '—'} · budget {wf.budgetSharePct.toFixed(1)}%</div>
+                        <div className="mt-1 text-xs text-muted-foreground">avg {fmtDuration(wf.avgMin)} · p99 {fmtDuration(wf.p99Min)} · p95 {wf.p95Min ? fmtDuration(wf.p95Min) : '—'} · queue {wf.queueMedianMin ? fmtDuration(wf.queueMedianMin) : '—'} · budget {wf.budgetSharePct.toFixed(1)}%</div>
+                        <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                          <Badge variant={wf.flakeScore >= 15 ? "destructive" : "secondary"} className={wf.flakeScore >= 15 ? "px-1 py-0 text-[10px]" : "px-1 py-0 text-[10px] bg-muted text-muted-foreground"}>flake {wf.flakeScore.toFixed(0)}%{wf.flaky ? `:${wf.flaky}` : ''}</Badge>
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">MTTR {wf.mttrMedianMin ? fmtDuration(wf.mttrMedianMin) : '—'}</Badge>
+                          <Badge variant={wf.wastedPct >= 25 ? "destructive" : "secondary"} className={wf.wastedPct >= 25 ? "px-1 py-0 text-[10px]" : "px-1 py-0 text-[10px] bg-muted text-muted-foreground"}>waste {wf.wastedPct.toFixed(0)}% · {comma(wf.wastedMinutes)}m</Badge>
+                        </div>
                         <div className="mt-2 flex h-1 overflow-hidden rounded-full bg-muted">
                           <div className="bg-[var(--chart-2)]" style={{ width: `${(wf.homeRuns / Math.max(1, wf.runs) * 100)}%` }} />
                           <div className="bg-[var(--chart-3)]" style={{ width: `${(wf.githubRuns / Math.max(1, wf.runs) * 100)}%` }} />
@@ -585,8 +644,11 @@ export default function CIPage() {
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('p50')}>p50 {sortKey.key==='p50' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('p90')}>p90 {sortKey.key==='p90' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('p99')}>p99 {sortKey.key==='p99' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('p95')}>p95 {sortKey.key==='p95' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('successRate')}>Success% {sortKey.key==='successRate' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('flake')}>Flake% {sortKey.key==='flake' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('mttr')}>MTTR {sortKey.key==='mttr' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
+                        <TableHead className="cursor-pointer select-none" onClick={() => handleSort('wasted')}>Wasted {sortKey.key==='wasted' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('queue')}>Queue {sortKey.key==='queue' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead className="cursor-pointer select-none" onClick={() => handleSort('budget')}>Budget {sortKey.key==='budget' ? (sortKey.dir==='desc'?'↓':'↑') : ''}</TableHead>
                         <TableHead>Hosting split</TableHead>
@@ -596,7 +658,7 @@ export default function CIPage() {
                     </TableHeader>
                     <TableBody>
                       {filteredWorkflows.length === 0 ? (
-                        <TableRow><TableCell colSpan={14} className="py-10 text-center text-sm text-muted-foreground">No workflows match filters.</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={17} className="py-10 text-center text-sm text-muted-foreground">No workflows match filters.</TableCell></TableRow>
                       ) : (
                         filteredWorkflows.map((wf) => {
                           const red = wf.isSlow || wf.successRate < 85
@@ -612,10 +674,13 @@ export default function CIPage() {
                               <TableCell className={cn('tabular-nums text-xs', wf.p50Min > 10 ? 'text-red-600 dark:text-red-400 font-medium' : '')}>{fmtDuration(wf.p50Min)}</TableCell>
                               <TableCell className={cn('tabular-nums text-xs', wf.p90Min > 25 ? 'text-red-600 dark:text-red-400 font-medium' : '')}>{fmtDuration(wf.p90Min)}</TableCell>
                               <TableCell className="tabular-nums text-xs">{fmtDuration(wf.p99Min)}</TableCell>
+                              <TableCell className={cn('tabular-nums text-xs', (wf as any).p95Min > 25 ? 'text-red-600 dark:text-red-400 font-medium' : '')}>{(wf as any).p95Min ? fmtDuration((wf as any).p95Min) : '—'}</TableCell>
                               <TableCell className={cn('tabular-nums text-xs', wf.successRate < 85 ? 'text-red-600 dark:text-red-400 font-medium' : wf.successRate < 92 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400')}>
                                 {wf.successRate.toFixed(0)}%
                               </TableCell>
                               <TableCell className="tabular-nums text-xs">{wf.flakeScore.toFixed(0)}%{wf.flaky>0 ? ` (${wf.flaky})` : ''}</TableCell>
+                              <TableCell className={cn('tabular-nums text-xs', (wf as any).mttrMedianMin >= 120 ? 'text-amber-600 dark:text-amber-400 font-medium' : '')}>{(wf as any).mttrMedianMin ? fmtDuration((wf as any).mttrMedianMin) : '—'}{(wf as any).mttrCount ? ` · ${(wf as any).mttrCount}` : ''}</TableCell>
+                              <TableCell className={cn('tabular-nums text-xs', (wf as any).wastedPct >= 25 ? 'text-red-600 dark:text-red-400 font-medium' : (wf as any).wastedPct >= 10 ? 'text-amber-600 dark:text-amber-400' : '')}>{comma((wf as any).wastedMinutes ?? 0)}<span className="text-muted-foreground"> · {((wf as any).wastedPct ?? 0).toFixed(0)}%</span></TableCell>
                               <TableCell className="tabular-nums text-xs">{wf.queueMedianMin ? fmtDuration(wf.queueMedianMin) : '—'}</TableCell>
                               <TableCell className="tabular-nums text-xs">{wf.budgetSharePct.toFixed(1)}%</TableCell>
                               <TableCell><HostSplitBar home={wf.homeRuns} github={wf.githubRuns} unknown={wf.unknownRuns} /></TableCell>
@@ -638,7 +703,7 @@ export default function CIPage() {
                   </Table>
                 </div>
                 <div className="border-t bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-                  Health red if p50&gt;10m or p90&gt;25m or success&lt;85% · Hosting inferred via substring allowlist (lint,test,build,quality,mutation,trivy,docker,integration,e2e,unit,hybrid,home → home) · Queue = RunStartedAt − CreatedAt median · Flake = failure→success within 24h / failures · Budget = workflow minutes / total minutes · Δ = workflow p50 − opposite lane global p50 (negative = home faster)
+                  Health red if p50&gt;10m or p90&gt;25m or success&lt;85% · Hosting inferred via substring allowlist (lint,test,build,quality,mutation,trivy,docker,integration,e2e,unit,hybrid,home → home) · Queue = RunStartedAt − CreatedAt median · Flake = failure→success within 24h / failures · MTTR = median recovery to next success · Wasted = failure minutes / total · Budget = workflow minutes / total minutes · Δ = workflow p50 − opposite lane global p50 (negative = home faster) · Cost = totalMinutes / merges
                 </div>
               </Card>
             </div>
