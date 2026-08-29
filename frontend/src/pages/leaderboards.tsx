@@ -19,6 +19,7 @@ import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
 import { Pager } from '@/components/pager'
 import { StateIcon } from '@/components/state-icon'
+import { VirtualizedTable } from '@/components/virtualized-table'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -404,6 +405,107 @@ export default function LeaderboardsPage() {
           <EmptyState text={error} />
         ) : !data || data.rows.length === 0 ? (
           <EmptyState text="No pull requests match this filter." />
+        ) : data.rows.length > 50 ? (
+          <>
+            <VirtualizedTable
+              data={data.rows}
+              rowKey={(row) => `${row.pull.repo}#${row.pull.number}`}
+              columns={[
+                {
+                  header: 'Rank',
+                  cell: (_row, i) => {
+                    const rank = data.pager.from + i + 1
+                    return <span className={cn(rankClass(rank))}>{rank}</span>
+                  },
+                },
+                {
+                  header: 'Pull request',
+                  cell: (row) => (
+                    <>
+                      <a
+                        href={row.pull.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold hover:text-blue-600 dark:hover:text-blue-400"
+                      >
+                        {row.pull.title}
+                      </a>
+                      <span className="text-muted-foreground"> · {row.pull.repo}#{row.pull.number}</span>
+                    </>
+                  ),
+                },
+                {
+                  header: 'Author',
+                  cell: (row) => (
+                    <div className="flex items-center gap-2">
+                      <img src={avatarUrl(row.pull.author)} alt="" className="size-5 rounded-full" loading="lazy" />
+                      <a
+                        href={`https://github.com/${row.pull.author}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                      >
+                        {row.pull.author}
+                      </a>
+                    </div>
+                  ),
+                },
+                ...(metric !== 'additions'
+                  ? [
+                      {
+                        header: 'Additions',
+                        headerClassName: 'text-right',
+                        cellClassName: 'text-right font-mono text-green-600 tabular-nums dark:text-green-400',
+                        cell: (row: RankedPull) => `+${comma(row.pull.additions)}`,
+                      } as const,
+                    ]
+                  : []),
+                ...(metric !== 'deletions'
+                  ? [
+                      {
+                        header: 'Deletions',
+                        headerClassName: 'text-right',
+                        cellClassName: 'text-right font-mono text-red-600 tabular-nums dark:text-red-400',
+                        cell: (row: RankedPull) => `−${comma(row.pull.deletions)}`,
+                      } as const,
+                    ]
+                  : []),
+                {
+                  header: metricCol(metric).label,
+                  headerClassName: 'text-right bg-muted',
+                  cellClassName: 'text-right bg-muted font-semibold tabular-nums',
+                  cell: (row: RankedPull) => metricCol(metric).cell(row),
+                },
+                ...(metric !== 'files'
+                  ? [
+                      {
+                        header: 'Files',
+                        headerClassName: 'text-right',
+                        cellClassName: 'text-right tabular-nums',
+                        cell: (row: RankedPull) => comma(row.pull.changedFiles),
+                      } as const,
+                    ]
+                  : []),
+                ...(metric !== 'commits'
+                  ? [
+                      {
+                        header: 'Commits',
+                        headerClassName: 'text-right',
+                        cellClassName: 'text-right tabular-nums',
+                        cell: (row: RankedPull) => comma(row.pull.commits),
+                      } as const,
+                    ]
+                  : []),
+                {
+                  header: 'Merged',
+                  headerClassName: 'text-right',
+                  cellClassName: 'whitespace-nowrap text-right text-muted-foreground',
+                  cell: (row: RankedPull) => formatDate(row.pull.mergedAt),
+                },
+              ]}
+            />
+            <Pager pager={data.pager} onPage={handlePageChange} />
+          </>
         ) : (
           <>
             <Table>

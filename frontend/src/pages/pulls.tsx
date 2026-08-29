@@ -1,6 +1,7 @@
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { avatarUrl, getPulls, getStatus, type Pull } from '@/lib/api'
 import { comma, formatDate } from '@/lib/format'
@@ -139,6 +140,73 @@ function metricCell(pull: Pull, metric: string): ReactNode {
     default:
       return comma(v)
   }
+}
+
+function VirtualizedPullList({ pulls }: { pulls: Pull[] }) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: pulls.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+  })
+  const items = virtualizer.getVirtualItems()
+  return (
+    <div ref={parentRef} style={{ maxHeight: 600, overflow: 'auto' }}>
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+        {items.map((vr) => {
+          const pull = pulls[vr.index]
+          const size = pull.additions + pull.deletions
+          const sizeInfo = sizeClass(size)
+          const cycle = cycleDays(pull)
+          return (
+            <div
+              key={`${pull.repo}#${pull.number}`}
+              data-index={vr.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${vr.start}px)`,
+              }}
+            >
+              <PrRow
+                pull={pull}
+                extras={
+                  <>
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        data-testid="size-chip"
+                        className={cn(
+                          'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
+                          sizeInfo.className,
+                        )}
+                      >
+                        {sizeInfo.label}
+                      </span>
+                      {cycle ? <span className="tabular-nums">{cycle}</span> : null}
+                      {pull.isBot ? (
+                        <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
+                          bot
+                        </span>
+                      ) : null}
+                      {pull.isDraft ? (
+                        <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
+                          draft
+                        </span>
+                      ) : null}
+                    </span>
+                  </>
+                }
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function SummaryStrip({ rows }: { rows: Pull[] }) {
@@ -401,43 +469,47 @@ export default function PullsPage() {
         <>
           <SummaryStrip rows={data.rows} />
           <Card className="overflow-hidden">
-            {data.rows.map((pull) => {
-              const size = pull.additions + pull.deletions
-              const sizeInfo = sizeClass(size)
-              const cycle = cycleDays(pull)
-              return (
-                <PrRow
-                  key={`${pull.repo}#${pull.number}`}
-                  pull={pull}
-                  extras={
-                    <>
-                      <span className="flex items-center gap-1.5">
-                        <span
-                          data-testid="size-chip"
-                          className={cn(
-                            'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
-                            sizeInfo.className,
-                          )}
-                        >
-                          {sizeInfo.label}
+            {data.rows.length > 50 ? (
+              <VirtualizedPullList pulls={data.rows} />
+            ) : (
+              data.rows.map((pull) => {
+                const size = pull.additions + pull.deletions
+                const sizeInfo = sizeClass(size)
+                const cycle = cycleDays(pull)
+                return (
+                  <PrRow
+                    key={`${pull.repo}#${pull.number}`}
+                    pull={pull}
+                    extras={
+                      <>
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            data-testid="size-chip"
+                            className={cn(
+                              'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
+                              sizeInfo.className,
+                            )}
+                          >
+                            {sizeInfo.label}
+                          </span>
+                          {cycle ? <span className="tabular-nums">{cycle}</span> : null}
+                          {pull.isBot ? (
+                            <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
+                              bot
+                            </span>
+                          ) : null}
+                          {pull.isDraft ? (
+                            <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
+                              draft
+                            </span>
+                          ) : null}
                         </span>
-                        {cycle ? <span className="tabular-nums">{cycle}</span> : null}
-                        {pull.isBot ? (
-                          <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
-                            bot
-                          </span>
-                        ) : null}
-                        {pull.isDraft ? (
-                          <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
-                            draft
-                          </span>
-                        ) : null}
-                      </span>
-                    </>
-                  }
-                />
-              )
-            })}
+                      </>
+                    }
+                  />
+                )
+              })
+            )}
             {data.pager.total > 0 ? <Pager pager={data.pager} onPage={handlePageChange} /> : null}
           </Card>
         </>

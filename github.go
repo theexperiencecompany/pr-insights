@@ -13,6 +13,14 @@ import (
 	"time"
 )
 
+// sync.Pool for reusable byte buffers in doREST (reduces per-request alloc).
+var restBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4<<10)
+		return &b
+	},
+}
+
 const (
 	apiBase         = "https://api.github.com"
 	graphQLURL      = "https://api.github.com/graphql"

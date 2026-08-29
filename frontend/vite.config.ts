@@ -21,5 +21,17 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        // Code-split vendor and Entire; manualChunks as function to satisfy Vite 8 / rolldown types.
+        manualChunks: (id: string) => {
+          if (id.includes('node_modules/recharts')) return 'entire'
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom'))
+            return 'vendor'
+          return undefined
+        },
+      },
+    },
   },
 })

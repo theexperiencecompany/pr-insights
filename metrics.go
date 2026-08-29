@@ -5,8 +5,43 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ---- performance pools ----
+
+// float64SlicePool reuses temporary []float64 buffers for median/percentile calculations.
+var float64SlicePool = sync.Pool{
+	New: func() any {
+		s := make([]float64, 0, 64)
+		return &s
+	},
+}
+
+// rankedPullPool reuses []RankedPull slices for leaderboard ranking.
+var rankedPullPool = sync.Pool{
+	New: func() any {
+		s := make([]RankedPull, 0, 32)
+		return &s
+	},
+}
+
+// contributorMapPool reuses maps for contributor aggregation (cleared on Put).
+var contributorMapPool = sync.Pool{
+	New: func() any {
+		m := make(map[string]*Contributor, 32)
+		return &m
+	},
+}
+
+// shipBucketPool reuses map[string]*ShipBucket for shipping series.
+var shipBucketPool = sync.Pool{
+	New: func() any {
+		m := make(map[string]*ShipBucket, 16)
+		return &m
+	},
+}
 
 // Metric is a leaderboard ranking dimension.
 type Metric string
@@ -135,9 +170,14 @@ type Contributor struct {
 
 // Contributors aggregates merged pulls per author, ranked by merge count.
 func Contributors(pulls []Pull) []Contributor {
-	byLogin := make(map[string]*Contributor)
-	reposByLogin := make(map[string]map[string]bool)
-	weeksByLogin := make(map[string][]string)
+	// Pre-allocate maps based on expected distinct authors (roughly pulls/4 avg).
+	estAuthors := len(pulls)/4 + 4
+	if estAuthors < 8 {
+		estAuthors = 8
+	}
+	byLogin := make(map[string]*Contributor, estAuthors)
+	reposByLogin := make(map[string]map[string]bool, estAuthors)
+	weeksByLogin := make(map[string][]string, estAuthors)
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" {
@@ -210,12 +250,12 @@ type RepoStat struct {
 
 // RepoStats aggregates per-repo metrics, ranked by total PR count.
 func RepoStats(pulls []Pull, repos []RepoInfo) []RepoStat {
-	idx := make(map[string]*RepoStat, len(repos))
+	idx := make(map[string]*RepoStat, len(repos)+4)
 	for i := range repos {
 		r := &repos[i]
 		idx[r.Name] = &RepoStat{RepoInfo: *r}
 	}
-	contribByRepo := make(map[string]map[string]bool)
+	contribByRepo := make(map[string]map[string]bool, len(idx)+4)
 	for i := range pulls {
 		p := &pulls[i]
 		st := idx[p.Repo]
@@ -316,7 +356,7 @@ func PullsByState(pulls []Pull, state string) []Pull {
 	if state == "" || state == "all" {
 		return pulls
 	}
-	out := make([]Pull, 0, len(pulls))
+	out := make([]Pull, 0, len(pulls)/2)
 	for _, p := range pulls {
 		if strings.EqualFold(p.State, state) {
 			out = append(out, p)
@@ -327,7 +367,7 @@ func PullsByState(pulls []Pull, state string) []Pull {
 
 // SearchPulls filters by repo, state and a title/number search term.
 func SearchPulls(pulls []Pull, repo, state, q string) []Pull {
-	out := make([]Pull, 0, len(pulls))
+	out := make([]Pull, 0, len(pulls)/2+4)
 	ql := strings.ToLower(strings.TrimSpace(q))
 	for _, p := range pulls {
 		if repo != "" && p.Repo != repo {
@@ -425,8 +465,16 @@ func ShippingSeries(pulls []Pull, repo string, g Granularity, since time.Time) [
 
 // ShippingSeriesRange is ShippingSeries with an optional upper bound.
 func ShippingSeriesRange(pulls []Pull, repo string, g Granularity, from, to time.Time) []ShipBucket {
-	byKey := make(map[string]*ShipBucket)
-	cycles := make(map[string][]float64)
+	// Pre-allocate maps with size hints to reduce rehashing; distinct buckets <= pulls length.
+	hint := len(pulls)/8 + 4
+	if hint < 8 {
+		hint = 8
+	}
+	if hint > 256 {
+		hint = 256
+	}
+	byKey := make(map[string]*ShipBucket, hint)
+	cycles := make(map[string][]float64, hint)
 	floorKey := ""
 	if !from.IsZero() {
 		floorKey = bucketKeyFloor(from, g)
@@ -597,8 +645,15 @@ type CIBucket struct {
 
 // CISeries buckets workflow runs by run start time.
 func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucket {
-	byKey := make(map[string]*CIBucket)
-	durations := make(map[string][]float64)
+	hint := len(runs)/16 + 8
+	if hint < 8 {
+		hint = 8
+	}
+	if hint > 256 {
+		hint = 256
+	}
+	byKey := make(map[string]*CIBucket, hint)
+	durations := make(map[string][]float64, hint)
 
 	for i := range runs {
 		r := &runs[i]
@@ -707,16 +762,20 @@ type WorkflowStat struct {
 
 // WorkflowStats aggregates runs per workflow, ranked by run count.
 func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
-	idx := make(map[string]*WorkflowStat)
-	durations := make(map[string][]float64)
-	order := make([]string, 0)
+	hint := len(runs)/16 + 8
+	if hint < 8 {
+		hint = 8
+	}
+	idx := make(map[string]*WorkflowStat, hint)
+	durations := make(map[string][]float64, hint)
+	order := make([]string, 0, hint)
 
 	type monthly struct {
 		total   int
 		success int
 		failure int
 	}
-	monthlyByWF := make(map[string]map[string]*monthly)
+	monthlyByWF := make(map[string]map[string]*monthly, hint)
 
 	for i := range runs {
 		r := &runs[i]
@@ -897,7 +956,7 @@ func SemanticTimeline(pulls []Pull, gran Granularity) []SemanticBucket {
 	if gran != GranWeek {
 		gran = GranMonth
 	}
-	byKey := make(map[string]*SemanticBucket)
+	byKey := make(map[string]*SemanticBucket, 16)
 	var minTime, maxTime time.Time
 	for i := range pulls {
 		p := &pulls[i]
@@ -948,9 +1007,32 @@ func SemanticTimeline(pulls []Pull, gran Granularity) []SemanticBucket {
 }
 
 // medianFloat returns the median of a numeric slice (0 for empty).
+// Uses sync.Pool to reuse the sorting buffer and avoid per-call allocations.
 func medianFloat(v []float64) float64 {
 	if len(v) == 0 {
 		return 0
+	}
+	// Reuse pooled buffer if small enough to avoid large retained slices.
+	if len(v) <= 1024 {
+		ptr := float64SlicePool.Get().(*[]float64)
+		buf := *ptr
+		if cap(buf) < len(v) {
+			buf = make([]float64, len(v))
+		} else {
+			buf = buf[:len(v)]
+		}
+		copy(buf, v)
+		sort.Float64s(buf)
+		mid := len(buf) / 2
+		var out float64
+		if len(buf)%2 == 1 {
+			out = buf[mid]
+		} else {
+			out = (buf[mid-1] + buf[mid]) / 2
+		}
+		*ptr = buf[:0]
+		float64SlicePool.Put(ptr)
+		return out
 	}
 	sorted := make([]float64, len(v))
 	copy(sorted, v)

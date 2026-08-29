@@ -93,9 +93,10 @@ type Data struct {
 
 // State guards Data with a mutex and persists it to disk.
 type State struct {
-	mu   sync.RWMutex
-	data Data
-	path string
+	mu      sync.RWMutex
+	data    Data
+	path    string
+	version uint64
 }
 
 func NewStore(dataDir string) (*State, error) {
@@ -163,6 +164,21 @@ func (s *State) Snapshot() Data {
 	return s.data
 }
 
+// SnapshotVersion returns the monotonically increasing version of the dataset.
+// It increments on every Replace call and is used for memoization keys.
+func (s *State) SnapshotVersion() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.version
+}
+
+// SnapshotWithVersion returns both the data and its version atomically.
+func (s *State) SnapshotWithVersion() (Data, uint64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data, s.version
+}
+
 // syncResult carries everything a completed sync wants to commit.
 type syncResult struct {
 	org       string
@@ -188,6 +204,7 @@ func (s *State) Replace(res syncResult) {
 	s.data.SyncedAt = &res.syncedAt
 	s.data.LastError = ""
 	s.data.RateLimit = res.rl
+	s.version++
 }
 
 func (s *State) markSyncing(on bool) {

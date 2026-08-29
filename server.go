@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"sort"
 	"strconv"
 	"time"
@@ -51,6 +54,16 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte("ok\n"))
 	})
+	// pprof endpoints (standard library)
+	mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+	mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+	mux.HandleFunc("GET /debug/pprof/heap", pprof.Handler("heap").ServeHTTP)
+	mux.HandleFunc("GET /debug/pprof/goroutine", pprof.Handler("goroutine").ServeHTTP)
+	mux.HandleFunc("GET /debug/pprof/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
+	mux.HandleFunc("GET /debug/pprof/block", pprof.Handler("block").ServeHTTP)
 	mux.HandleFunc("/", s.handleSPA)
 	return mux
 }
@@ -149,6 +162,17 @@ func (s *Server) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		slog.Warn("encode workflow-runs payload", "err", err)
 	}
+}
+
+func etagFor(v any) string {
+	h := sha256.New()
+	// Lightweight ETag: hash JSON representation length + version-like input
+	// Caller should pass a stable struct; we hash its JSON marshaling.
+	if b, err := json.Marshal(v); err == nil {
+		h.Write(b)
+		return `W/"` + hex.EncodeToString(h.Sum(nil)[:8]) + `"`
+	}
+	return ""
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

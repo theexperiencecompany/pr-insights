@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"time"
 )
@@ -78,6 +79,7 @@ func main() {
 	go entire.Run(ctx, envDurOr("ENTIRE_SYNC_INTERVAL", 15*time.Minute))
 
 	slog.Info("pr-insights listening", "addr", cfg.Addr, "org", cfg.Org, "data_dir", cfg.DataDir)
+	slog.Info("pprof enabled", "addr", cfg.Addr, "path", "/debug/pprof/")
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)

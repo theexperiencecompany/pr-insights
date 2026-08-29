@@ -3,8 +3,24 @@ package main
 import (
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// pools for features.go
+var heatmapPool = sync.Pool{
+	New: func() any {
+		m := make(map[string]int, 365)
+		return &m
+	},
+}
+
+var velocityPool = sync.Pool{
+	New: func() any {
+		s := make([]VelocityDelta, 0, 3)
+		return &s
+	},
+}
 
 // Additional analytics: velocity deltas, bot split, shipping distribution,
 // streaks, bus factor, activity heatmaps, CI cost/trend extras. All derived
@@ -197,7 +213,7 @@ type BotSplit struct {
 
 func BotSplitOf(pulls []Pull) BotSplit {
 	var out BotSplit
-	seen := make(map[string]bool)
+	seen := make(map[string]bool, 16)
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" {
@@ -331,7 +347,7 @@ func Heatmap(pulls []Pull, login string, days int) []DayCount {
 	if days <= 0 {
 		days = 365
 	}
-	byDay := make(map[string]int)
+	byDay := make(map[string]int, days)
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" || p.MergedAt == nil {
@@ -369,7 +385,7 @@ func ContributorDetailOf(pulls []Pull, login string) ContributorDetail {
 
 func ContributorDetailOfGran(pulls []Pull, login string, gran Granularity) ContributorDetail {
 	detail := ContributorDetail{Login: login, IsBot: IsBot(login)}
-	mine := make([]Pull, 0)
+	mine := make([]Pull, 0, 16)
 	for _, p := range pulls {
 		if p.Author == login {
 			mine = append(mine, p)

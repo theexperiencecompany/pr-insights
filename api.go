@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -69,12 +70,16 @@ type insightsStats struct {
 // ---- builders (shared with the HTML handlers until they are removed) ----
 
 func computeOverview(snap Data, largestN int, gran Granularity) apiOverview {
+	return computeOverviewVersion(snap, largestN, gran, 0)
+}
+
+func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint64) apiOverview {
 	open, merged, closed := CountState(snap.Pulls)
 	contribs := Contributors(snap.Pulls)
 	if gran != GranWeek {
 		gran = GranMonth
 	}
-	monthly := ShippingSeries(snap.Pulls, "", gran, time.Time{})
+	monthly := cachedShipping(snap.Pulls, "", gran, time.Time{}, ver)
 
 	var additions, deletions, files, commits int
 	for _, p := range snap.Pulls {
@@ -269,6 +274,10 @@ func computeShame(snap Data) ShameList {
 }
 
 func computeInsights(snap Data, repo, period string, gran Granularity) apiInsights {
+	return computeInsightsVersion(snap, repo, period, gran, 0)
+}
+
+func computeInsightsVersion(snap Data, repo, period string, gran Granularity, ver uint64) apiInsights {
 	var since time.Time
 	switch period {
 	case "3m":
@@ -279,11 +288,11 @@ func computeInsights(snap Data, repo, period string, gran Granularity) apiInsigh
 		since = time.Now().UTC().AddDate(0, -12, 0)
 	}
 
-	ship := ShippingSeries(snap.Pulls, repo, gran, since)
+	ship := cachedShipping(snap.Pulls, repo, gran, since, ver)
 	var shipPrev []ShipBucket
 	if period == "12m" {
 		prevSince := since.AddDate(0, -12, 0)
-		shipPrev = ShippingSeriesRange(snap.Pulls, repo, gran, prevSince, since)
+		shipPrev = cachedShippingSeries(snap.Pulls, repo, gran, prevSince, since, ver)
 	}
 	ci := CISeries(snap.Runs, repo, gran, since)
 	workflows := WorkflowStats(snap.Runs, repo, since)
@@ -340,7 +349,15 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 	if gran != GranWeek {
 		gran = GranMonth
 	}
-	writeJSON(w, computeOverview(s.store.Snapshot(), largestN, gran))
+	snap, ver := s.store.SnapshotWithVersion()
+	// ETag based on snapshot version + query params
+	etag := fmt.Sprintf(`W/"%d-%s-%d"`, ver, gran, largestN)
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	writeJSON(w, computeOverviewVersion(snap, largestN, gran, ver))
 }
 
 func (s *Server) handleAPILeaderboards(w http.ResponseWriter, r *http.Request) {
@@ -573,5 +590,12 @@ func (s *Server) handleAPIInsights(w http.ResponseWriter, r *http.Request) {
 	if gran != GranWeek {
 		gran = GranMonth
 	}
-	writeJSON(w, computeInsights(s.store.Snapshot(), repo, period, gran))
+	snap, ver := s.store.SnapshotWithVersion()
+	etag := fmt.Sprintf(`W/"%d-%s-%s-%s"`, ver, repo, period, gran)
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	writeJSON(w, computeInsightsVersion(snap, repo, period, gran, ver))
 }
