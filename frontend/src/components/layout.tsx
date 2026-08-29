@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/pulls', label: 'Pull requests', end: false },
   { to: '/people', label: 'People', end: false },
   { to: '/insights', label: 'Insights', end: false },
+  { to: '/ci', label: 'CI', end: false },
   { to: '/entire', label: 'Entire', end: false },
 ]
 

@@ -43,7 +43,7 @@ type Pull struct {
 
 // Run is one GitHub Actions workflow run.
 type Run struct {
-	ID           int64     `json:"id"`
+	ID           int64       `json:"id"`
 	Repo         string    `json:"repo"`
 	Workflow     string    `json:"workflow"`
 	Branch       string    `json:"branch"`
@@ -53,7 +53,8 @@ type Run struct {
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	RunStartedAt time.Time `json:"runStartedAt"`
-	DurationSec  int       `json:"durationSec"`
+	DurationSec  int         `json:"durationSec"`
+	RunnerGroup  RunnerGroup `json:"runnerGroup,omitempty"`
 }
 
 // RateLimitInfo is the last known GitHub API rate-limit state.

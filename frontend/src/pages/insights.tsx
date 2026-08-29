@@ -8,8 +8,11 @@ import {
   BarChart,
   Brush,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ReferenceArea,
   ReferenceLine,
   XAxis,
@@ -33,9 +36,9 @@ import {
   ChartContainer,
   ChartLegend,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
+import { TipShell, TipRow, getPayloadColor } from '@/components/chart-tips'
 import {
   Select,
   SelectContent,
@@ -102,37 +105,19 @@ function Filter({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function TipShell({ label, children }: { label?: string | number; children: ReactNode }) {
-  return (
-    <div className="grid min-w-32 items-start gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
-      {label !== undefined ? <div className="font-medium">{String(label)}</div> : null}
-      {children}
-    </div>
-  )
-}
+// TipShell+TipRow imported from @/components/chart-tips (unified)
 
-function TipRow({ color, label, value }: { color?: string; label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="flex items-center gap-1.5">
-        {color ? (
-          <span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />
-        ) : null}
-        <span className="text-muted-foreground">{label}</span>
-      </div>
-      <span className="font-mono font-medium text-foreground tabular-nums">{value}</span>
-    </div>
-  )
-}
-
-// Series metadata for the shipping charts: key → label + value formatter.
-const SHIP_SERIES: Record<string, { label: string; format: (v: number) => string }> = {
+// Series metadata for the shipping charts: key → label + value formatter + dashed styling.
+const SHIP_SERIES: Record<string, { label: string; format: (v: number) => string; dashed?: boolean; description?: string }> = {
   merged: { label: 'Merged', format: (v) => `${comma(Math.round(v))} PRs` },
-  ma: { label: 'Moving avg', format: (v) => `${comma(Math.round(v))} PRs` },
-  forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs` },
-  prev: { label: 'Last year', format: (v) => `${comma(Math.round(v))} PRs` },
+  ma: { label: 'Moving average', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Moving average (trailing 5wk/3mo)' },
+  forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Forecast linear extrap +1..+3 — not a prediction' },
+  prev: { label: 'Last year', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Last year' },
   lines: { label: 'Lines', format: (v) => `${comma(Math.round(v))} lines` },
   cycle: { label: 'Median', format: (v) => `${v.toFixed(1)} days` },
+  total: { label: 'Total lines', format: (v) => `${comma(Math.round(v))} lines` },
+  p75: { label: 'p75', format: (v) => `${v.toFixed(1)} days`, dashed: true, description: 'p75 cycle time' },
+  p90: { label: 'p90', format: (v) => `${v.toFixed(1)} days`, dashed: true, description: 'p90 cycle time' },
 }
 
 // Display order for the merged chart's tooltip rows (unknown series last).
@@ -143,18 +128,20 @@ const seriesRank = (key: string): number => {
 }
 
 // SeriesTip renders one row per series present in the hovered point, so every
-// line (merged, moving average, last year, forecast) is explained at once.
+// line (merged, moving average, last year, forecast, p75/p90) is explained at once.
+// Dashed lines show dashed swatch + description per spec.
 function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
   const row = payload[0]?.payload as { merged?: number | null; ma?: number | null } | undefined
   const entries = payload
     .map((p) => {
       const key = String(p.dataKey)
+      const col = (getPayloadColor(p) ?? p.color ?? p.stroke) as string | undefined
       return {
         key,
         spec: SHIP_SERIES[key],
         value: p.value,
-        color: (p.color as string) ?? (p.stroke as string),
+        color: col ?? "var(--chart-1)",
       }
     })
     .filter((e): e is { key: string; spec: (typeof SHIP_SERIES)[string]; value: number; color: string } =>
@@ -168,13 +155,13 @@ function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<numbe
     mergedEntry && row && typeof row.merged === 'number' && typeof row.ma === 'number' && row.ma > 0
       ? ((row.merged - row.ma) / row.ma) * 100
       : null
-  const dashed = entries.filter((e) => e.key === 'forecast' || e.key === 'prev')
+  const dashedEntries = entries.filter((e) => e.spec.dashed)
   const tipLabel = typeof label === 'string' && label.startsWith('+') ? `Forecast ${label}` : label
 
   return (
     <TipShell label={tipLabel}>
       {entries.map((e) => (
-        <TipRow key={e.key} color={e.color} label={e.spec.label} value={e.spec.format(e.value)} />
+        <TipRow key={e.key} color={e.color} label={e.spec.label} value={e.spec.format(e.value)} dashed={Boolean(e.spec.dashed)} />
       ))}
       {delta !== null ? (
         <div
@@ -185,9 +172,14 @@ function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<numbe
           {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs moving avg
         </div>
       ) : null}
-      {dashed.length > 0 ? (
-        <div className="text-[11px] text-muted-foreground">
-          {dashed.map((d) => d.spec.label).join(' & ')} shown dashed
+      {dashedEntries.length > 0 ? (
+        <div className="grid gap-0.5 border-t border-border/40 pt-1">
+          {dashedEntries.map((d) => (
+            <div key={d.key} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="h-0 w-3 shrink-0 border-t-2 border-dashed" style={{ borderColor: d.color }} aria-hidden />
+              <span>{d.spec.description ?? d.spec.label} — dashed</span>
+            </div>
+          ))}
         </div>
       ) : null}
     </TipShell>
@@ -196,10 +188,13 @@ function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<numbe
 
 function RateTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
-  const rate = Number(payload[0]?.value ?? 0)
+  const v = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(v)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-2)"
   return (
     <TipShell label={label}>
-      <div className="font-mono font-medium tabular-nums">{rate.toFixed(1)}%</div>
+      <TipRow color={col} label="Success rate" value={`${v.toFixed(1)}%`} />
+      {v < 90 ? <div className="text-[11px] text-amber-600 dark:text-amber-400">Below SLO 90% — dashed threshold</div> : null}
     </TipShell>
   )
 }
@@ -207,12 +202,107 @@ function RateTip({ active, payload, label }: Partial<TooltipContentProps<number,
 function DurationTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
   const minutes = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(minutes)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
   return (
     <TipShell label={label}>
-      <div className="font-mono font-medium tabular-nums">{fmtDuration(minutes)}</div>
+      <TipRow color={col} label="Median duration" value={fmtDuration(minutes)} />
     </TipShell>
   )
 }
+
+function CumulativeTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const v = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(v)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-2)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col} label="Total lines" value={`${comma(Math.round(v))} lines`} />
+    </TipShell>
+  )
+}
+
+function MinutesTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const v = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(v)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col} label="Minutes" value={`${comma(Math.round(v))} min`} />
+    </TipShell>
+  )
+}
+
+function TShirtTip({ active, payload }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (!entry?.value) return null
+  const datum: any = entry.payload ?? {}
+  const col = (getPayloadColor(entry) ?? datum.fill ?? datum.color ?? "var(--chart-1)") as string
+  const name = String(entry.name ?? datum.size ?? datum.label ?? "Size")
+  const count = Number(entry.value ?? 0)
+  const pct = typeof datum.pct === "number" ? ` · ${datum.pct.toFixed(1)}%` : ""
+  return (
+    <TipShell>
+      <TipRow color={col} label={name} value={`${comma(count)}${pct}`} />
+    </TipShell>
+  )
+}
+function LeadTimeTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const rows = payload
+    .filter((e) => typeof e.value === "number" && Number.isFinite(e.value as number))
+    .sort((a, b) => Number(b.value) - Number(a.value))
+  if (!rows.length) return null
+  return (
+    <TipShell label={label}>
+      {rows.map((entry) => {
+        const key = String(entry.dataKey)
+        const isDashed = key === "p90" || key === "p75"
+        const col = getPayloadColor(entry) ?? (key === "p90" ? "var(--chart-5)" : "var(--chart-1)")
+        const labelMap: Record<string, string> = { p50: "p50", p90: "p90", p75: "p75" }
+        return (
+          <TipRow key={key} color={col as string} label={labelMap[key] ?? key} value={`${Number(entry.value).toFixed(1)}d`} dashed={isDashed} />
+        )
+      })}
+      {rows.some((r) => String(r.dataKey) === "p90") ? (
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="h-0 w-3 shrink-0 border-t-2 border-dashed" style={{ borderColor: "var(--chart-5)" }} aria-hidden />
+          <span>p90 — 90th percentile (dashed)</span>
+        </div>
+      ) : null}
+    </TipShell>
+  )
+}
+function WipTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const v = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(v)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col as string} label="WIP" value={`${v.toFixed(1)}`} />
+    </TipShell>
+  )
+}
+function AbandonTip({ active, payload }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (!entry?.value) return null
+  const datum: any = entry.payload ?? {}
+  const col = (getPayloadColor(entry) ?? datum.color ?? "var(--chart-3)") as string
+  const name = String(entry.name ?? datum.label ?? "Segment")
+  const count = Number(entry.value ?? 0)
+  return (
+    <TipShell>
+      <TipRow color={col} label={name} value={`${comma(count)}`} />
+    </TipShell>
+  )
+}
+
+
 
 function CiTip({
   active,
@@ -229,14 +319,14 @@ function CiTip({
       {rows.map((entry) => (
         <TipRow
           key={String(entry.dataKey)}
-          color={entry.color}
+          color={getPayloadColor(entry) ?? (entry.color as string)}
           label={String(entry.name ?? entry.dataKey)}
-          value={Number(entry.value ?? 0).toLocaleString()}
+          value={comma(Number(entry.value ?? 0))}
         />
       ))}
       <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
         <span className="text-muted-foreground">Total</span>
-        <span className="font-mono font-medium tabular-nums">{total.toLocaleString()}</span>
+        <span className="font-mono font-medium tabular-nums">{comma(total)}</span>
       </div>
     </TipShell>
   )
@@ -995,7 +1085,7 @@ export default function InsightsPage() {
                 </ChartCard>
               </div>
 
-              <div className="mt-4 grid gap-4">
+              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <ChartCard title="Cycle time — median days from opened to merged">
                   <ChartContainer config={shipConfig} className="aspect-auto h-64">
                     <LineChart data={cycleData} margin={{ left: 0, right: 8, top: 4 }}>
@@ -1036,11 +1126,8 @@ export default function InsightsPage() {
                     </LineChart>
                   </ChartContainer>
                 </ChartCard>
-              </div>
-
-              <div className="mt-4 grid gap-4">
                 <ChartCard title="Cumulative lines shipped">
-                  <ChartContainer config={shipConfig} className="aspect-auto h-56">
+                  <ChartContainer config={shipConfig} className="aspect-auto h-64">
                     <AreaChart data={cumulativeData} margin={{ left: 0, right: 8, top: 4 }}>
                       <CartesianGrid vertical={false} />
                       <XAxis
@@ -1059,13 +1146,7 @@ export default function InsightsPage() {
                       {yearBoundaries.map((x) => (
                         <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                       ))}
-                      <ChartTooltip
-                        content={
-                          <ChartTooltipContent
-                            formatter={(value) => `${comma(Number(value))} lines`}
-                          />
-                        }
-                      />
+                      <ChartTooltip content={<CumulativeTip />} />
                       <Area
                         type="monotone"
                         dataKey="total"
@@ -1085,6 +1166,88 @@ export default function InsightsPage() {
               </div>
             </>
           )}
+
+          {/* VISION DORA-lite — see docs/vision-dora-lite.md */}
+          {data.tshirt && data.tshirt.length > 0 ? (
+            <div className="mt-6">
+              <SectionHeading>DORA-lite flow health</SectionHeading>
+              <p className="text-xs text-muted-foreground">T-shirt sizing · Lead-time band · WIP sparkline · Abandonment — &lt;5s flow check ({data.leadOverall?.count ?? 0} merges in window)</p>
+              <div className="mt-3 grid gap-4 md:grid-cols-2">
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">T-shirt size (XS–XXL) · {data.tshirt.reduce((s,x)=>s+x.count,0)} merged</CardTitle></CardHeader>
+                  <CardContent>
+                    <ChartContainer config={{ XS:{label:'XS',color:'var(--chart-2)'}, S:{label:'S',color:'var(--chart-1)'}, M:{label:'M',color:'#1f883d'}, L:{label:'L',color:'#d29922'}, XL:{label:'XL',color:'#cf222e'}, XXL:{label:'XXL',color:'#82071e'} }} className="mx-auto aspect-square max-h-[260px]">
+                      <PieChart>
+                        <Pie data={data.tshirt} dataKey="count" nameKey="size" cx="50%" cy="50%" innerRadius={52} outerRadius={80} paddingAngle={2}>
+                          {data.tshirt.map((e:any)=> (<Cell key={e.size} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
+                        </Pie>
+                        <ChartTooltip content={<TShirtTip />} />
+                      </PieChart>
+                    </ChartContainer>
+                    <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                      {data.tshirt.map((s:any)=>(
+                        <span key={s.size} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                          <span className="inline-block size-2 rounded-full" style={{ background: s.color }} />{s.size} {s.count} ({s.pct.toFixed(1)}%)
+                        </span>
+                      ))}
+                    </div>
+                    {data.tshirt.some((s:any)=>s.size==='XXL' && s.pct>10) ? <p className="mt-2 text-center text-xs text-amber-600">XXL &gt;10% — consider splitting large PRs</p> : null}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Lead-time band · p50 {data.leadOverall.p50?.toFixed(1) ?? '—'}d · p90 {data.leadOverall.p90?.toFixed(1) ?? '—'}d</CardTitle></CardHeader>
+                  <CardContent>
+                    {data.leadTime && data.leadTime.length>0 ? (
+                      <ChartContainer config={{ p50:{label:'p50',color:'var(--chart-1)'}, p90:{label:'p90',color:'var(--chart-5)'} }} className="h-[260px] w-full">
+                        <AreaChart data={data.leadTime} margin={{ left:12, right:12, top:4 }}>
+                          <CartesianGrid vertical={false} />
+                          <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
+                          <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v:number)=>`${v.toFixed(0)}d`} />
+                          <ChartTooltip content={<LeadTimeTip />} />
+                          <Area type="monotone" dataKey="p90" stroke="var(--chart-5)" fill="var(--chart-5)" fillOpacity={0.15} strokeWidth={1} dot={false} />
+                          <Area type="monotone" dataKey="p50" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.25} strokeWidth={2} dot={false} />
+                        </AreaChart>
+                      </ChartContainer>
+                    ) : <p className="text-xs text-muted-foreground">No lead-time data for this window.</p>}
+                    <p className="mt-1 text-center text-[11px] text-muted-foreground">p50 solid · p90 light · ideal p50 &lt;2d, p90 &lt;7d</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">WIP sparkline · avg {data.wip?.avgWip?.toFixed(1) ?? '—'} · predicted {data.wip?.predictedWip?.toFixed(1) ?? '—'} · err {data.wip?.errorPct?.toFixed(0) ?? '—'}%</CardTitle></CardHeader>
+                  <CardContent>
+                    {data.wip?.points && data.wip.points.length>0 ? (
+                      <ChartContainer config={{ wip:{label:'WIP',color:'var(--chart-1)'} }} className="h-[120px] w-full">
+                        <AreaChart data={data.wip.points} margin={{ left:0, right:4, top:4 }}>
+                          <CartesianGrid vertical={false} />
+                          <XAxis dataKey="date" hide />
+                          <YAxis hide domain={['dataMin','dataMax']} />
+                          <ChartTooltip content={<WipTip />} />
+                          <Area type="monotone" dataKey="wip" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.15} strokeWidth={1.5} dot={false} />
+                          {data.wip.avgWip ? <ReferenceLine y={data.wip.avgWip} stroke="var(--chart-5)" strokeDasharray="3 3" /> : null}
+                        </AreaChart>
+                      </ChartContainer>
+                    ) : <p className="text-xs text-muted-foreground">No WIP data.</p>}
+                    <p className="mt-1 text-[11px] text-muted-foreground">Little&apos;s Law: WIP ≈ Throughput × CycleTime · current {data.wip?.currentWip ?? 0}</p>
+                    {data.wip && data.wip.errorPct>20 ? <p className="text-xs text-amber-600">Flow mismatch — throughput/cycle diverge</p> : null}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Abandonment · {data.abandon?.abandonedRate?.toFixed(1) ?? '0'}% {data.abandon?.abandonedRate>=20 ? 'High waste' : data.abandon?.abandonedRate>=10 ? 'Watch' : 'Healthy'}</CardTitle></CardHeader>
+                  <CardContent>
+                    <ChartContainer config={{ Merged:{label:'Merged',color:'var(--chart-2)'}, Abandoned:{label:'Abandoned',color:'var(--chart-3)'}, Open:{label:'Open',color:'var(--chart-5)'} }} className="mx-auto aspect-square max-h-[220px]">
+                      <PieChart>
+                        <Pie data={data.abandon?.segments ?? []} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={2}>
+                          {(data.abandon?.segments ?? []).map((e:any)=> (<Cell key={e.label} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
+                        </Pie>
+                        <ChartTooltip content={<AbandonTip />} />
+                      </PieChart>
+                    </ChartContainer>
+                    <p className="mt-2 text-center text-xs text-muted-foreground">{data.abandon?.closed ?? 0} closed without merge of { (data.abandon?.merged ?? 0)+(data.abandon?.closed ?? 0)} terminated ({data.abandon?.abandonedRate?.toFixed(1) ?? '0'}%)</p>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          ) : null}
 
           <SectionHeading>CI</SectionHeading>
 
@@ -1114,6 +1277,108 @@ export default function InsightsPage() {
                 />
                 <StatCard label="Workflows" value={comma(data.ciStats.workflows)} />
               </div>
+
+              {/* VISION Hybrid — see docs/vision-hybrid.md */}
+              {data.hybrid ? (
+                <div className="mt-4 rounded-lg border bg-muted/30 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold">Hybrid CI lane · home {data.hybrid.split.homePctRuns?.toFixed(0) ?? 0}% of runs · github {(100-(data.hybrid.split.homePctRuns??0)).toFixed(0)}% fallback</h3>
+                    <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">thresholds p50&gt;{data.hybrid.thresholds?.p50 ?? 10}m p90&gt;{data.hybrid.thresholds?.p90 ?? 25}m red</span>
+                  </div>
+                  <div className="mt-3 grid gap-4 lg:grid-cols-3">
+                    <Card>
+                      <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Runner split</CardTitle></CardHeader>
+                      <CardContent>
+                        <ChartContainer config={{ home:{label:'home',color:'var(--chart-2)'}, github:{label:'github',color:'var(--chart-3)'} }} className="mx-auto aspect-square max-h-[220px]">
+                          <PieChart>
+                            <Pie data={[{name:'home', value: data.hybrid.split.homeRuns},{name:'github', value: data.hybrid.split.githubRuns}]} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={42} outerRadius={64} paddingAngle={2}>
+                              <Cell fill="var(--chart-2)" />
+                              <Cell fill="var(--chart-3)" />
+                            </Pie>
+                            <ChartTooltip content={<TShirtTip />} />
+                          </PieChart>
+                        </ChartContainer>
+                        <p className="mt-2 text-center text-xs text-muted-foreground">home {data.hybrid.split.homeRuns} runs ({data.hybrid.split.homePctRuns.toFixed(1)}%) · github {data.hybrid.split.githubRuns} runs · {data.hybrid.split.githubMinutes+data.hybrid.split.homeMinutes>0 ? `${data.hybrid.split.homePctMinutes.toFixed(1)}% of minutes` : ''}</p>
+                        {data.hybrid.split.unknownRuns>0 ? <p className="text-center text-[11px] text-muted-foreground">+{data.hybrid.split.unknownRuns} unknown</p> : null}
+                      </CardContent>
+                    </Card>
+                    <div className="lg:col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      {data.hybrid.workflows.slice(0,6).map((w:any)=>(
+                        <Card key={w.key} className="rounded-[6px]">
+                          <CardContent className="p-3">
+                            <div className="flex items-center justify-between">
+                              <span className="truncate text-xs font-medium" title={w.workflow}>{w.workflow}</span>
+                              {w.isSlow ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">Slow</Badge> : w.p50Min>8 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/40">Watch</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">Healthy</Badge>}
+                            </div>
+                            <div className={"text-lg font-semibold tabular-nums " + (w.isSlow ? 'text-red-600 dark:text-red-400' : w.p50Min>8 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground')}> {w.p50Min.toFixed(1)}m <span className="text-xs font-normal text-muted-foreground">· p90 {w.p90Min.toFixed(1)}m</span></div>
+                            <div className="text-[11px] text-muted-foreground">avg {w.avgMin.toFixed(1)}m · n={w.runs} {w.isSampleSmall ? '· n<10 interpret cautiously' : ''}</div>
+                            <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-[var(--chart-1)]" style={{ width: `${Math.min(100, (w.p90Min/40)*100)}%` }} /></div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                      {data.hybrid.workflows.length>6 ? <div className="text-xs text-muted-foreground">＋{data.hybrid.workflows.length-6} more — scroll to workflows table ↓</div> : null}
+                      {data.hybrid.workflows.length===0 ? <p className="text-xs text-muted-foreground">No workflow runs in period for this filter.</p> : null}
+                    </div>
+                  </div>
+                  <Card className="mt-3">
+                    <CardContent className="flex items-center justify-between p-3">
+                      <div><div className="text-sm font-semibold">Release · p50 {data.hybrid.release.p50?.toFixed(1) ?? '—'}d · p90 {data.hybrid.release.p90?.toFixed(1) ?? '—'}d</div><div className="text-xs text-muted-foreground">n={data.hybrid.release.count} merges · {data.hybrid.release.windowDays}w window</div></div>
+                      <Badge variant={data.hybrid.release.p90>14 ? 'destructive' : data.hybrid.release.p90>7 ? 'secondary' : 'outline'} className={data.hybrid.release.p90<=7 ? 'bg-green-100 text-green-700 dark:bg-green-900/40' : data.hybrid.release.p90<=14 ? 'bg-amber-100 text-amber-700' : ''}>{data.hybrid.release.p90>14 ? 'Slow' : data.hybrid.release.p90>7 ? 'Watch' : 'Healthy'}</Badge>
+                    </CardContent>
+                  </Card>
+                </div>
+              ) : null}
+
+              {/* VISION Flaky — see docs/vision-flaky.md */}
+              {data.costPerMerge ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Card><CardContent className="p-3"><div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cost per merge</div><div className="text-xl font-semibold tabular-nums text-chart-1">{data.costPerMerge.perMergeMin ? `${data.costPerMerge.perMergeMin.toFixed(1)} min` : '—'}</div><div className="text-[11px] text-muted-foreground">{comma(data.costPerMerge.totalMinutes)} min / {comma(data.costPerMerge.merged)} merges</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Wasted minutes</div><div className="text-xl font-semibold tabular-nums text-red-600 dark:text-red-400">{comma((data.flakyWorkflows ?? []).reduce((s:any,f:any)=>s+f.wastedMinutes,0))}</div><div className="text-[11px] text-muted-foreground">{((data.flakyWorkflows ?? []).reduce((s:any,f:any)=>s+f.wastedMinutes,0) / Math.max(1,(data.flakyWorkflows ?? []).reduce((s:any,f:any)=>s+f.wastedMinutes+f.success*5,0))*100).toFixed(1)}% waste (est)</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">MTTR median</div><div className="text-xl font-semibold tabular-nums">{(() => { const vals = (data.flakyWorkflows ?? []).map((f:any)=>f.mttrMedianMin).filter((v:number)=>v>0); if(vals.length===0) return '—'; vals.sort((a:number,b:number)=>a-b); const mid=Math.floor(vals.length/2); const med = vals.length%2?vals[mid]:(vals[mid-1]+vals[mid])/2; return `${med.toFixed(0)}m`; })()}</div><div className="text-[11px] text-muted-foreground">time to next success (per-workflow)</div></CardContent></Card>
+                  <Card><CardContent className="p-3"><div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Flakiest</div><div className="text-xl font-semibold tabular-nums">{(data.flakyWorkflows ?? []).length>0 ? `${(data.flakyWorkflows[0].flakeScore ?? 0).toFixed(1)}%` : '—'}</div><div className="text-[11px] text-muted-foreground">{(data.flakyWorkflows ?? []).length>0 ? data.flakyWorkflows[0].workflow : 'no data'}</div></CardContent></Card>
+                </div>
+              ) : null}
+              {(data.needsAttention && data.needsAttention.length>0) || (data.flakyWorkflows && data.flakyWorkflows.length>0) ? (
+                <Card className="mt-4">
+                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Workflows needing attention · {(data.needsAttention ?? []).length} of {(data.flakyWorkflows ?? []).length}</CardTitle></CardHeader>
+                  <CardContent>
+                    {(data.needsAttention && data.needsAttention.length>0) ? (
+                      <div className="space-y-2">
+                        {data.needsAttention.map((wf:any)=>(
+                          <div key={`${wf.repo}/${wf.workflow}`} className="flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2">
+                            <span className="flex items-center gap-2 text-sm font-medium"><span className="size-2 rounded-full bg-chart-3" />{wf.workflow} <span className="text-xs text-muted-foreground">· {wf.repo}</span></span>
+                            <span className="flex flex-wrap items-center gap-1.5 text-xs">
+                              <Badge variant={wf.flakeScore>=30 ? 'destructive' : wf.flakeScore>=15 ? 'secondary' : 'outline'} className={wf.flakeScore>=15 && wf.flakeScore<30 ? 'bg-amber-100 text-amber-700' : ''}>flake {wf.flakeScore.toFixed(1)}%</Badge>
+                              <Badge variant={wf.failureRate>=20 ? 'destructive' : 'outline'}>fail {wf.failureRate.toFixed(1)}%</Badge>
+                              <span className="tabular-nums text-muted-foreground">p95 {wf.p95Min?.toFixed(1) ?? '—'}m</span>
+                              <span className="tabular-nums text-muted-foreground">MTTR {wf.mttrMedianMin? `${wf.mttrMedianMin.toFixed(0)}m` : '—'}</span>
+                              <span className="tabular-nums text-muted-foreground">waste {wf.wastedMinutes}m</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/30 dark:text-green-200">All stable — no workflow meets attention threshold (flake ≥15%, fail ≥20%, MTTR ≥2h, waste ≥25%).</div>}
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead><tr className="text-muted-foreground"><th className="text-left font-medium">Workflow</th><th className="text-right font-medium">Flake</th><th className="text-right font-medium">Fail%</th><th className="text-right font-medium">p50</th><th className="text-right font-medium">p95</th><th className="text-right font-medium">MTTR</th><th className="text-right font-medium">Waste</th></tr></thead>
+                        <tbody>
+                          {(data.flakyWorkflows ?? []).slice(0,8).map((wf:any)=>(
+                            <tr key={`${wf.repo}/${wf.workflow}`} className="border-t">
+                              <td className="py-1 font-medium">{wf.workflow}</td>
+                              <td className="py-1 text-right tabular-nums">{wf.flakeScore.toFixed(1)}%</td>
+                              <td className="py-1 text-right tabular-nums">{wf.failureRate.toFixed(1)}%</td>
+                              <td className="py-1 text-right tabular-nums">{wf.p50Min.toFixed(1)}m</td>
+                              <td className="py-1 text-right tabular-nums">{wf.p95Min.toFixed(1)}m</td>
+                              <td className="py-1 text-right tabular-nums">{wf.mttrMedianMin ? `${wf.mttrMedianMin.toFixed(0)}m` : '—'}</td>
+                              <td className="py-1 text-right tabular-nums">{wf.wastedMinutes}m</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
 
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <ChartCard title="Workflow runs">
@@ -1214,14 +1479,7 @@ export default function InsightsPage() {
                         axisLine={false}
                         tickFormatter={(v: number) => compact(Number(v))}
                       />
-                      <ChartTooltip
-                        cursor={{ fill: 'var(--muted)' }}
-                        content={
-                          <ChartTooltipContent
-                            formatter={(value) => `${comma(Number(value))} min`}
-                          />
-                        }
-                      />
+                      <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<MinutesTip />} />
                       <Bar
                         dataKey="minutes"
                         name="Minutes"

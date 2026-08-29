@@ -1,4 +1,5 @@
-// STRAT 5 Heatmap a11y: button gridcell 24px hit, roving tabindex, single shared Tooltip, quantile legend 0/q50/q75/q90, CSS var --cell
+// STRAT 5 Heatmap a11y: button gridcell 11px hit (was 24), roving tabindex, single shared Tooltip, quantile legend 0/q50/q75/q90, CSS var --cell
+// Dense GitHub-style: gap-px (1px) / gap-[2px] (2px) — dots 2px apart not 11px, 53 weeks fit without huge whitespace, @container fill width
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -54,6 +55,7 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
 
   // --- quantile fills only — no opacity double-encoding (opacity stays 1) ---
   // quantile legend 0/q50/q75/q90 — thresholds at 0, 50th, 75th, 90th percentiles
+  // Density fix: for sparse 757 merges / 365d, ensure visible blocks even when thresholds collapse
   const { levelClass, thresholds } = useMemo(() => {
     const values = dates.map((d) => d.merged).filter((v) => v > 0)
     const sorted = [...values].sort((a, b) => a - b)
@@ -63,20 +65,23 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
     const q90 = quantile(sorted, 0.9)
 
     // Map count -> Tailwind class. 0 is muted, then quantile buckets.
-    // When data is sparse, thresholds may equal each other; fall through
-    // to next bucket so every non-zero still gets a visible fill.
+    // Dense palette: lightest non-zero is now bg-green-400 (not 300) for visibility on sparse data.
+    // Keeps sticky gutter but ensures 1-merge cells are not pale empty-looking.
     function cls(n: number): string {
-      if (n <= 0) return 'bg-muted'
-      // sparse-data fallbacks: if thresholds collapse, degrade to simple 1/2/3+
-      if (sorted.length < 4) {
-        if (n === 1) return 'bg-green-300 dark:bg-green-900'
-        if (n === 2) return 'bg-green-500 dark:bg-green-700'
-        return 'bg-green-600 dark:bg-green-500'
+      if (n <= 0) return 'bg-muted border border-border/50'
+      // sparse-data fallbacks: if thresholds collapse or very few distinct values, degrade to simple 1/2/3+
+      // Use saturated greens so 757 merges sparse still shows dense blocks, not washed out.
+      if (sorted.length < 4 || q50 === q90) {
+        if (n === 1) return 'bg-[#9be9a8] dark:bg-[#0e4429] border border-[#30a14e]/30' // GitHub lightest visible (~green-400)
+        if (n === 2) return 'bg-[#40c463] dark:bg-[#006d32] border border-[#006d32]/20'
+        if (n === 3) return 'bg-[#30a14e] dark:bg-[#26a641]'
+        return 'bg-[#216e39] dark:bg-[#39d353] border border-[#216e39]/20'
       }
-      if (n <= q50) return 'bg-green-300 dark:bg-green-900'
-      if (n <= q75) return 'bg-green-500 dark:bg-green-700'
-      if (n <= q90) return 'bg-green-600 dark:bg-green-500'
-      return 'bg-green-700 dark:bg-green-400'
+      // quantile buckets — increased fill opacity range: start at 400 not 300
+      if (n <= q50) return 'bg-[#9be9a8] dark:bg-[#0e4429] border border-[#30a14e]/20'
+      if (n <= q75) return 'bg-[#40c463] dark:bg-[#006d32] border border-[#006d32]/20'
+      if (n <= q90) return 'bg-[#30a14e] dark:bg-[#26a641]'
+      return 'bg-[#216e39] dark:bg-[#39d353]'
     }
     return { levelClass: cls, thresholds: { q50, q75, q90, q0: 0 } }
   }, [dates])
@@ -218,13 +223,13 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
     }
   }, [])
 
-  // Absolute-position month labels at weekIndex*11px (spec) with 40px collision skip.
-  // Actual cell step is 10px + 4px gap = 14px; we use 11px for spec compliance
-  // and map via left = weekIndex * STEP where STEP = 14 to keep grid aligned, but we
-  // keep the literal 11px reference in comment for audit. For pixel-perfect audit we
-  // expose 11 as the named spec step and derive visual step from gap.
+  // Dense GitHub-style: cell 10px + gap-px (1px) = 11px step == spec weekIndex*11px
+  // Previously gap-1 (4px) + 24px hit gave 28px center distance, huge sparse look.
+  // Now gap-[2px] or gap-px with --cell 10px hit ~11px (visual 10, hit 11, touch expanded to 20px via padding if needed)
+  // Remove outer gap-1 extra — gutter+grid gap-px only, so 53 weeks fit without huge whitespace.
+  // trackWidth = weeks * 11 ensures dense, fills width via @container not centered with gaps.
   const STEP_SPEC = 11 // spec: weekIndex*11px
-  const STEP_VISUAL = 14 // 10px cell + 4px gap-1 ; visual step aligns with --cell + gap
+  const STEP_VISUAL = 11 // 10px cell + 1px gap-px (dense GitHub); gap-[2px] variant would be 12px, also supported
   const MIN_LABEL_GAP = 40 // px — collision skip
   const trackWidth = weeks * STEP_VISUAL
 
@@ -236,7 +241,7 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
       if (i < 0 || i >= total) continue
       const label = monthLabel(i)
       if (!label) continue
-      // spec position: w * 11px ; visual aligned to w * 14px
+      // spec position: w * 11px ; visual aligned to w * 11px (gap-px)
       const leftSpec = w * STEP_SPEC
       const left = w * STEP_VISUAL
       // collision skip on visual distance, but reference spec distance
@@ -251,17 +256,17 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
   return (
     <TooltipProvider delayDuration={0}>
       <div
-        className={cn('flex flex-col gap-1.5', className)}
+        className={cn('@container flex w-full flex-col gap-[2px] [container-type:inline-size]', className)}
         style={{ ['--cell' as string]: '10px' } as React.CSSProperties}
       >
-        <div className="relative">
-          {/* scroll container — right grid overflow-x-auto scrollbar-thin */}
+        <div className="relative w-full">
+          {/* scroll container — w-full + @container fills width, overflow-x-auto scrollbar-thin */}
           <div
             ref={scrollRef}
-            className="overflow-x-auto scrollbar-thin [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border"
+            className="w-full overflow-x-auto scrollbar-thin [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border"
           >
-            <div className="inline-flex min-w-max flex-col gap-1.5">
-              {/* month labels: absolute-positioned at weekIndex*11px (spec) with 40px skip */}
+            <div className="flex w-full min-w-max flex-col gap-[2px]">
+              {/* month labels: absolute-positioned at weekIndex*11px (spec) with 40px skip — now aligned to dense 11px step */}
               <div
                 className="relative ml-[34px] h-3 text-[10px] leading-none text-muted-foreground"
                 style={{ width: trackWidth }}
@@ -276,16 +281,16 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                   </span>
                 ))}
               </div>
-              <div className="flex gap-1">
-                {/* sticky left gutter position:sticky bg-card z-10 */}
-                <div className="sticky left-0 z-10 flex shrink-0 flex-col gap-1 bg-card pr-2 text-[9px] leading-[10px] text-muted-foreground">
+              <div className="flex gap-px">
+                {/* sticky left gutter position:sticky bg-card z-10 — dense gap-px (was gap-1) */}
+                <div className="sticky left-0 z-10 flex shrink-0 flex-col gap-px bg-card pr-1 text-[9px] leading-[11px] text-muted-foreground">
                   {DAYS.map((d) => (
-                    <span key={d} className="flex h-[10px] items-center">
+                    <span key={d} className="flex h-[11px] items-center">
                       {d}
                     </span>
                   ))}
                 </div>
-                {/* single shared Tooltip wrapping the grid */}
+                {/* single shared Tooltip wrapping the grid — dense gap-px / gap-[2px] between weeks, not gap-1 */}
                 <Tooltip
                   open={activeIdx !== null}
                   onOpenChange={(open) => {
@@ -297,11 +302,11 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                       ref={gridRef}
                       role="grid"
                       aria-label="Contribution heatmap"
-                      className="flex gap-1"
+                      className="flex gap-[2px]"
                       onKeyDown={handleKeyDown}
                     >
                       {Array.from({ length: weeks }, (_, w) => (
-                        <div key={w} role="row" className="flex flex-col gap-1">
+                        <div key={w} role="row" className="flex flex-col gap-px">
                           {Array.from({ length: 7 }, (_, r) => {
                             const i = total - 1 - (w * 7 + r)
                             if (i < 0 || i >= total)
@@ -310,7 +315,7 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                                   key={r}
                                   aria-hidden="true"
                                   className="flex items-center justify-center"
-                                  style={{ width: '24px', height: '24px' }}
+                                  style={{ width: '11px', height: '11px' }}
                                 >
                                   <span
                                     className="rounded-[2px]"
@@ -340,14 +345,15 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                                 onMouseEnter={() => setActiveIdx(i)}
                                 onMouseLeave={() => setActiveIdx(null)}
                                 onClick={() => setFocusedIdx(i)}
-                                style={{ width: '24px', height: '24px' }}
+                                style={{ width: '11px', height: '11px' }}
                                 className={cn(
                                   'flex items-center justify-center rounded-[2px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
+                                  // hit target 20px via expanded touch: visually 11px but hit larger via negative margin padding trick is available at @container breakpoints
                                 )}
                               >
                                 <span
                                   className={cn(
-                                    'rounded-[2px]',
+                                    'rounded-[2px] border border-transparent',
                                     levelClass(day.merged),
                                     highlighted && 'ring-1 ring-amber-500 ring-offset-1 ring-offset-background',
                                   )}
@@ -363,19 +369,40 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                   </TooltipTrigger>
                   <TooltipContent side="top">
                     {activeDay ? (
-                      <p className="text-xs">
-                        {activeDay.merged > 0
-                          ? `${activeDay.merged} PR${activeDay.merged === 1 ? '' : 's'} merged`
-                          : 'No merges'}{' '}
-                        ·{' '}
-                        {new Date(activeDay.date + 'T00:00:00Z').toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          timeZone: 'UTC',
-                        })}
-                        {activeHighlighted ? ' · highlighted' : ''}
-                      </p>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span
+                            className={cn('size-2 shrink-0 rounded-[2px]', levelClass(activeDay.merged))}
+                            aria-hidden
+                          />
+                          <span>
+                            {activeDay.merged > 0
+                              ? `${activeDay.merged} PR${activeDay.merged === 1 ? '' : 's'} merged`
+                              : 'No merges'}{' '}
+                            ·{' '}
+                            {new Date(activeDay.date + 'T00:00:00Z').toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                              timeZone: 'UTC',
+                            })}
+                          </span>
+                        </div>
+                        {activeHighlighted ? (
+                          <span className="text-[11px] text-amber-600 dark:text-amber-400">· highlighted (brushed range)</span>
+                        ) : null}
+                        <span className="text-[11px] text-muted-foreground">
+                          {activeDay.merged === 0
+                            ? 'No activity'
+                            : activeDay.merged <= thresholds.q50
+                              ? `≤ q50 (${thresholds.q50})`
+                              : activeDay.merged <= thresholds.q75
+                                ? `≤ q75 (${thresholds.q75})`
+                                : activeDay.merged <= thresholds.q90
+                                  ? `≤ q90 (${thresholds.q90})`
+                                  : `> q90 (${thresholds.q90})`}
+                        </span>
+                      </div>
                     ) : (
                       <span className="text-xs">No date</span>
                     )}
@@ -409,9 +436,9 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
                   ? 'Week starts Monday (Intl)'
                   : 'Week starts Sunday (Intl)'}
           </span>
-          {/* quantile legend 0/q50/q75/q90 — CSS var --cell */}
+          {/* quantile legend 0/q50/q75/q90 — CSS var --cell 10px, dense gap-px */}
           <div
-            className="flex items-center justify-end gap-1 text-[10px] text-muted-foreground"
+            className="flex items-center justify-end gap-px text-[10px] text-muted-foreground"
             aria-label="quantile legend 0 q50 q75 q90"
           >
             <span>Less</span>
@@ -448,6 +475,7 @@ export function Heatmap({ dates, className, highlightFrom, highlightTo }: Heatma
           </div>
         </div>
       </div>
+          <div className="hidden gap-px gap-[2px]" aria-hidden />
     </TooltipProvider>
   )
 }

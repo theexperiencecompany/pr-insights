@@ -46,6 +46,7 @@ type apiOverview struct {
 	Bus             BusFactor        `json:"bus"`
 	Heatmap         []DayCount       `json:"heatmap"`
 	Semantic        SemanticOverview `json:"semantic"`
+	Hero            Hero             `json:"hero"`
 }
 
 type apiInsights struct {
@@ -58,6 +59,16 @@ type apiInsights struct {
 	CI          []CIBucket     `json:"ci"`
 	CIStats     insightsStats  `json:"ciStats"`
 	Workflows   []WorkflowStat `json:"workflows"`
+	// Vision extensions — DORA-lite, Flaky, Hybrid (all derived from snapshot, no new sync)
+	TShirt         []TShirtSegment  `json:"tshirt"`
+	LeadTime       []LeadTimeBucket `json:"leadTime"`
+	LeadOverall    LeadTimeBucket   `json:"leadOverall"`
+	WIP            LittleLaw        `json:"wip"`
+	Abandon        Abandonment      `json:"abandon"`
+	Flaky          []FlakyStat      `json:"flakyWorkflows"`
+	Cost           CostPerMerge     `json:"costPerMerge"`
+	NeedsAttention []FlakyStat      `json:"needsAttention"`
+	Hybrid         HybridStats      `json:"hybrid"`
 }
 
 type insightsStats struct {
@@ -65,6 +76,96 @@ type insightsStats struct {
 	SuccessRate    float64 `json:"successRate"`
 	MedianDuration float64 `json:"medianDuration"`
 	Workflows      int     `json:"workflows"`
+}
+
+type HybridStats struct {
+	Period      string           `json:"period"`
+	Gran        string           `json:"gran"`
+	Repo        string           `json:"repo"`
+	Split       RunnerSplit      `json:"split"`
+	Workflows   []WorkflowHybrid `json:"workflows"`
+	Release     ReleaseStats     `json:"release"`
+	Thresholds  map[string]float64 `json:"thresholds"`
+	RepoOptions []RepoInfo       `json:"repoOptions"`
+	Trend       []CIRunnerBucket `json:"trend"`
+	OverallP50  float64          `json:"overallP50"`
+	OverallP90  float64          `json:"overallP90"`
+	OverallAvg  float64          `json:"overallAvg"`
+	TotalRuns   int              `json:"totalRuns"`
+	TotalMinutes int             `json:"totalMinutes"`
+	HomeP50     float64          `json:"homeP50"`
+	GithubP50   float64          `json:"githubP50"`
+	DeltaHomeVsGithub float64    `json:"deltaHomeVsGithub"`
+}
+
+func periodToSince(period string) time.Time {
+	switch period {
+	case "3m":
+		return time.Now().UTC().AddDate(0, -3, 0)
+	case "6m":
+		return time.Now().UTC().AddDate(0, -6, 0)
+	case "12m":
+		return time.Now().UTC().AddDate(0, -12, 0)
+	default:
+		return time.Time{}
+	}
+}
+
+func computeHybrid(snap Data, repo, period string, gran Granularity) HybridStats {
+	since := periodToSince(period)
+	split := RunnerSplitOf(snap.Runs, repo, since)
+	workflows := WorkflowHybridStats(snap.Runs, repo, since)
+	release := ReleaseStatsOf(snap.Pulls, repo, since)
+	trend := HybridSeries(snap.Runs, repo, gran, since)
+	overallP50, overallP90, overallAvg, totalRuns, totalMinutes := OverallHybridStats(snap.Runs, repo, since)
+	// home vs github p50 for delta
+	var homeDurs, ghDurs []float64
+	for _, r := range snap.Runs {
+		if repo != "" && r.Repo != repo {
+			continue
+		}
+		t := r.CreatedAt
+		if t.IsZero() {
+			t = r.RunStartedAt
+		}
+		if !since.IsZero() && t.Before(since) {
+			continue
+		}
+		if r.Conclusion != "success" && r.Conclusion != "failure" {
+			continue
+		}
+		d := float64(r.DurationSec) / 60
+		switch RunnerGroupOf(r) {
+		case RunnerHome:
+			homeDurs = append(homeDurs, d)
+		case RunnerGithub:
+			ghDurs = append(ghDurs, d)
+		}
+	}
+	homeP50 := 0.0
+	githubP50 := 0.0
+	if len(homeDurs) > 0 {
+		sd := sortedCopy(homeDurs)
+		homeP50 = Percentile(sd, 50)
+	}
+	if len(ghDurs) > 0 {
+		sd := sortedCopy(ghDurs)
+		githubP50 = Percentile(sd, 50)
+	}
+	delta := 0.0
+	if homeP50 > 0 && githubP50 > 0 {
+		delta = homeP50 - githubP50
+	}
+	return HybridStats{
+		Period: period, Gran: string(gran), Repo: repo,
+		Split: split, Workflows: workflows, Release: release,
+		Thresholds: map[string]float64{"p50": P50ThresholdMin, "p90": P90ThresholdMin},
+		RepoOptions: repoOptionsWithPulls(snap),
+		Trend: trend,
+		OverallP50: overallP50, OverallP90: overallP90, OverallAvg: overallAvg,
+		TotalRuns: totalRuns, TotalMinutes: totalMinutes,
+		HomeP50: homeP50, GithubP50: githubP50, DeltaHomeVsGithub: delta,
+	}
 }
 
 // ---- builders (shared with the HTML handlers until they are removed) ----
@@ -107,6 +208,47 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 		top = top[:10]
 	}
 
+	// Hero: 90d window for cycle/throughput/bus, 30d for CI
+	now := time.Now().UTC()
+	since90 := now.AddDate(0, 0, -90)
+	since30 := now.AddDate(0, 0, -30)
+	cycle := CycleStatsOf(snap.Pulls, since90)
+	// fallback to all-time if window empty but org has merges
+	if cycle.Count == 0 {
+		all := CycleStatsOf(snap.Pulls, time.Time{})
+		if all.Count > 0 {
+			cycle = all
+			cycle.WindowDays = 0 // marker for all-time fallback (frontend shows pill)
+		}
+	}
+	ciSucc := CISuccessOf(snap.Runs, since30)
+	thr := ThroughputOf(snap.Pulls, now)
+	// hero bus uses same 90d window
+	windowPulls90 := make([]Pull, 0, len(snap.Pulls))
+	for _, p := range snap.Pulls {
+		if p.State != "MERGED" || p.MergedAt == nil {
+			continue
+		}
+		if p.MergedAt.Before(since90) {
+			continue
+		}
+		windowPulls90 = append(windowPulls90, p)
+	}
+	heroBus := BusFactorOf(contribs, merged)
+	if len(windowPulls90) > 0 {
+		windowContribs := Contributors(windowPulls90)
+		merged90 := 0
+		for _, p := range windowPulls90 {
+			if p.State == "MERGED" {
+				merged90++
+			}
+		}
+		heroBus = BusFactorOf(windowContribs, merged90)
+	}
+	heroNote := "90d window"
+	if cycle.WindowDays == 0 {
+		heroNote = "all-time fallback"
+	}
 	return apiOverview{
 		Org:            snap.Org,
 		AvatarURL:      snap.AvatarURL,
@@ -133,6 +275,7 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 			ByType:   SemanticBreakdown(snap.Pulls),
 			Timeline: SemanticTimeline(snap.Pulls, gran),
 		},
+		Hero: Hero{Cycle: cycle, CI: ciSucc, Throughput: thr, Bus: heroBus, WindowNote: heroNote},
 	}
 }
 
@@ -311,6 +454,30 @@ func computeInsightsVersion(snap Data, repo, period string, gran Granularity, ve
 		ciRate = float64(ciSuccess) / float64(denom) * 100
 	}
 
+	// Vision: DORA-lite (TShirt, LeadTime, WIP, Abandon), Flaky, Hybrid — all derived from same since window
+	tshirt := TShirtDistribution(snap.Pulls)
+	leadTime := LeadTimeSeries(snap.Pulls, repo, gran, since)
+	leadOverall := LeadTimeStats(snap.Pulls, repo, since)
+	wip := LittleLawOf(snap.Pulls, repo, 30)
+	if period == "3m" {
+		wip = LittleLawOf(snap.Pulls, repo, 90)
+	}
+	abandon := AbandonmentOf(snap.Pulls, repo, since)
+	flaky := FlakyStats(snap.Runs, repo, since)
+	cost := CostPerMergeOf(snap.Runs, snap.Pulls, repo, since)
+	needs := make([]FlakyStat, 0, 5)
+	for _, f := range flaky {
+		if f.Runs < FlakeMinRuns {
+			continue
+		}
+		if f.FlakeScore >= 15 || f.FailureRate >= 20 || f.MTTRMedianMin >= 120 || f.WastedPct >= 25 {
+			needs = append(needs, f)
+			if len(needs) >= 5 {
+				break
+			}
+		}
+	}
+	hybrid := computeHybrid(snap, repo, period, gran)
 	return apiInsights{
 		Repo:        repo,
 		Period:      period,
@@ -326,6 +493,15 @@ func computeInsightsVersion(snap Data, repo, period string, gran Granularity, ve
 			Workflows:      ciWorkflows,
 		},
 		Workflows: workflows,
+		TShirt: tshirt,
+		LeadTime: leadTime,
+		LeadOverall: leadOverall,
+		WIP: wip,
+		Abandon: abandon,
+		Flaky: flaky,
+		Cost: cost,
+		NeedsAttention: needs,
+		Hybrid: hybrid,
 	}
 }
 
@@ -576,6 +752,28 @@ func (s *Server) handleAPIPulls(w http.ResponseWriter, r *http.Request) {
 		Pager       pager      `json:"pager"`
 		RepoOptions []RepoInfo `json:"repoOptions"`
 	}{pulls[pg.From:pg.To], pg, repoOptionsWithPulls(snap)})
+}
+
+func (s *Server) handleAPIHybrid(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	period := r.URL.Query().Get("period")
+	switch period {
+	case "3m", "6m", "12m", "all":
+	default:
+		period = "6m"
+	}
+	gran := Granularity(r.URL.Query().Get("gran"))
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	snap, ver := s.store.SnapshotWithVersion()
+	etag := fmt.Sprintf(`W/"%d-hybrid-%s-%s-%s"`, ver, repo, period, gran)
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	writeJSON(w, computeHybrid(snap, repo, period, gran))
 }
 
 func (s *Server) handleAPIInsights(w http.ResponseWriter, r *http.Request) {

@@ -22,9 +22,9 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import {
   ChartContainer,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
+import { TipShell, TipRow, getPayloadColor } from '@/components/chart-tips'
 import { avatarUrl, getContributor } from '@/lib/api'
 import { comma, compact, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
@@ -36,6 +36,30 @@ const mergedConfig = {
 const cycleConfig = {
   cycle: { label: 'Cycle time', color: 'var(--chart-4)' },
 } satisfies ChartConfig
+
+function MergedTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (entry?.value == null) return null
+  const col = getPayloadColor(entry) ?? "var(--chart-1)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col as string} label="Merged" value={`${comma(Number(entry.value))} PRs`} />
+    </TipShell>
+  )
+}
+function CycleTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (entry?.value == null) return null
+  const col = getPayloadColor(entry) ?? "var(--chart-4)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col as string} label="Median" value={`${Number(entry.value).toFixed(1)} days`} />
+    </TipShell>
+  )
+}
+
 
 function SectionTitle({ children }: { children: string }) {
   return <div className="text-sm font-semibold">{children}</div>
@@ -213,10 +237,7 @@ export default function ContributorPage() {
                 {yearBoundaries.map((x) => (
                   <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                 ))}
-                <ChartTooltip
-                  cursor={{ stroke: 'var(--border)' }}
-                  content={<ChartTooltipContent formatter={(v) => `${comma(Number(v))} PRs`} />}
-                />
+                <ChartTooltip cursor={{ stroke: 'var(--border)' }} content={<MergedTip />} />
                 <Area
                   type="monotone"
                   dataKey="merged"
@@ -252,9 +273,7 @@ export default function ContributorPage() {
                 {yearBoundaries.map((x) => (
                   <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                 ))}
-                <ChartTooltip
-                  content={<ChartTooltipContent formatter={(v) => `${Number(v).toFixed(1)} days`} />}
-                />
+                <ChartTooltip content={<CycleTip />} />
                 <Line
                   type="monotone"
                   dataKey="cycle"

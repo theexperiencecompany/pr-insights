@@ -121,6 +121,7 @@ export interface WorkflowRun {
   updatedAt: string
   runStartedAt: string
   durationSec: number
+  runnerGroup?: RunnerGroup
 }
 
 export const getWorkflowRuns = (params: { workflow: string; repo?: string; limit?: number }): Promise<WorkflowRun[]> =>
@@ -138,6 +139,12 @@ export interface Status {
   repos: number
   rateLimit: { remaining: number; limit: number } | null
 }
+
+// Vision Hero types (docs/vision-hero.md)
+export interface HeroCycle { p50: number; p90: number; p75?: number; mean?: number; count: number; windowDays: number }
+export interface HeroCI { success: number; failure: number; total: number; rate: number; windowDays: number }
+export interface HeroThroughput { merged: number; perWeek: number; perDay: number; windowDays: number; prevMerged: number; deltaPct: number }
+export interface Hero { cycle: HeroCycle; ci: HeroCI; throughput: HeroThroughput; bus: { top3Share: number; top: Contributor[] }; windowNote?: string }
 
 export interface OverviewData {
   org: string
@@ -182,6 +189,7 @@ export interface OverviewData {
     byType: { type: string; count: number; percent: number }[]
     timeline: { key: string; label: string; total: number; counts: Record<string, number> }[]
   }
+  hero: Hero
 }
 
 export interface LeaderboardData {
@@ -220,6 +228,66 @@ export interface PullsData {
   repoOptions: RepoInfo[]
 }
 
+export interface TShirtSegment { size: string; label: string; count: number; pct: number; color: string }
+export interface LeadTimeBucket { key: string; label: string; count: number; p50: number; p75: number; p90: number; mean: number; min: number; max: number }
+export interface WIPPoint { date: string; wip: number }
+export interface LittleLaw { windowDays: number; avgWip: number; throughputPerDay: number; cycleMeanDays: number; predictedWip: number; errorPct: number; currentWip: number; points: WIPPoint[] }
+export interface DonutSegment { label: string; count: number; pct: number; color: string }
+export interface Abandonment { total: number; merged: number; closed: number; open: number; abandonedRate: number; segments: DonutSegment[]; bySize?: Record<string, number> }
+export interface FlakyStat {
+  repo: string; workflow: string;
+  runs: number; success: number; failure: number; flaky: number;
+  flakeScore: number; failureRate: number; successRate: number;
+  p50Min: number; p95Min: number;
+  mttrMedianMin: number; mttrMeanMin: number; mttrCount: number;
+  wastedMinutes: number; wastedPct: number;
+  trend?: number[]; lastRunAt: string | null; lastConclusion: string;
+}
+export interface CostPerMerge { totalMinutes: number; merged: number; perMergeMin: number; perMerge: string }
+export type RunnerGroup = 'home' | 'github' | 'unknown'
+export interface RunnerSplit {
+  homeRuns: number; githubRuns: number; unknownRuns: number; totalRuns: number
+  homeMinutes: number; githubMinutes: number; totalMinutes: number
+  homePctRuns: number; homePctMinutes: number; githubPctRuns: number
+}
+export interface WorkflowHybrid {
+  repo: string; workflow: string; key: string
+  runs: number
+  success: number; failure: number; other: number
+  successRate: number; failureRate: number
+  p50Min: number; p90Min: number; p99Min: number; avgMin: number
+  minMin?: number; maxMin?: number
+  thresholdP50: number; thresholdP90: number
+  isSlow: boolean; isSampleSmall: boolean
+  hosting: RunnerGroup
+  homeRuns: number; githubRuns: number; unknownRuns: number
+  budgetSharePct: number
+  queueMedianMin: number
+  flakeScore: number; flaky: number
+  deltaMin: number
+  lastRunAt: string | null
+  lastConclusion: string
+}
+export interface ReleaseStats { p50: number; p90: number; avg?: number; count: number; windowDays: number }
+export interface CIRunnerBucket {
+  key: string; label: string
+  home: number; github: number; unknown: number; total: number
+  homePct: number; githubPct: number; unknownPct: number
+  homeMinutes: number; githubMinutes: number; totalMinutes: number
+}
+export interface HybridData {
+  period: string; gran: string; repo: string
+  split: RunnerSplit
+  workflows: WorkflowHybrid[]
+  release: ReleaseStats
+  thresholds: { p50: number; p90: number }
+  repoOptions: RepoInfo[]
+  trend: CIRunnerBucket[]
+  overallP50: number; overallP90: number; overallAvg: number
+  totalRuns: number; totalMinutes: number
+  homeP50: number; githubP50: number; deltaHomeVsGithub: number
+}
+
 export interface InsightsData {
   ship: ShipBucket[]
   shipPrev?: ShipBucket[] // present when period=12m — same window one year earlier
@@ -232,6 +300,18 @@ export interface InsightsData {
     workflows: number
   }
   repoOptions: RepoInfo[]
+  // Vision DORA-lite (docs/vision-dora-lite.md)
+  tshirt: TShirtSegment[]
+  leadTime: LeadTimeBucket[]
+  leadOverall: LeadTimeBucket
+  wip: LittleLaw
+  abandon: Abandonment
+  // Vision Flaky (docs/vision-flaky.md)
+  flakyWorkflows: FlakyStat[]
+  costPerMerge: CostPerMerge
+  needsAttention: FlakyStat[]
+  // Vision Hybrid (docs/vision-hybrid.md)
+  hybrid: HybridData
 }
 
 const json = async <T>(res: Response): Promise<T> => {
@@ -283,6 +363,14 @@ export const getInsights = (params: {
   gran?: string
 } = {}): Promise<InsightsData> => fetch(`/api/insights${qs(params)}`).then(json<InsightsData>)
 
+export const getHybrid = (params: {
+  repo?: string
+  period?: string
+  gran?: string
+} = {}): Promise<HybridData> => fetch(`/api/hybrid${qs(params)}`).then(json<HybridData>)
+
+export const getCI = getHybrid
+
 export const getRepos = (): Promise<RepoStat[]> => fetch('/api/repos', { cache: 'no-store' }).then(json<RepoStat[]>)
 
 // ---- Entire (agent checkpoint analytics) ----
@@ -315,6 +403,31 @@ export interface EntireAgent {
   }
 }
 
+export interface RepoJoinPoint {
+  repo: string; short: string;
+  checkpoints: number; mergedCount: number;
+  tokens: number; dominantAgent: string;
+  agents: Record<string, number>;
+  addedLines: number; bubbleSize: number; cpPerPR: number;
+}
+export interface StreakGuard {
+  currentStreak: number; lifetimeStreak: number; lifetimeCurrent: number;
+  streak: number;
+  lastActiveDate: string; daysSinceActive: number;
+  hoursLeftUtc: number; state: 'safe'|'at_risk'|'broken'|'unknown';
+  reason: string; needToday: boolean; throughputHint: string;
+}
+export interface TokenCoachAgent {
+  agentId: string; agentLabel: string;
+  tokensPerCp: number; tokensPerFile: number; tokensPerSession: number;
+  transcriptRatio: number; shellPct: number; mcpPct: number;
+  tier: 'efficient'|'moderate'|'heavy'; tips: string[];
+}
+export interface TokenCoach {
+  rollupTokensPerCp: number; rollupTokensPerFile: number;
+  throughput: number; byAgent: TokenCoachAgent[];
+  summaryTip: string; wastedEstTokens: number;
+}
 export interface EntireData {
   fetchedAt: string | null
   lastError: string
@@ -356,6 +469,11 @@ export interface EntireData {
     agents: Record<string, EntireAgent>
     daily: { date: string; count: number }[]
   } | null
+  // Vision Entire (docs/vision-entire.md) — derived join
+  repoJoin?: RepoJoinPoint[]
+  guard?: StreakGuard
+  coach?: TokenCoach
+  brushMeta?: { minDate: string; maxDate: string; from?: string; to?: string }
 }
 
 export const getEntire = (): Promise<EntireData> => fetch('/api/entire', { cache: 'no-store' }).then(json<EntireData>)

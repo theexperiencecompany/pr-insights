@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { Layout } from '@/components/layout'
 import ContributorPage from '@/pages/contributor'
+import CIPage from '@/pages/ci'
 import InsightsPage from '@/pages/insights'
 import OverviewPage from '@/pages/overview'
 import PeoplePage from '@/pages/people'
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="people" element={<PeoplePage />} />
         <Route path="people/:login" element={<ContributorPage />} />
         <Route path="insights" element={<InsightsPage />} />
+        <Route path="ci" element={<CIPage />} />
         <Route
           path="entire"
           element={

@@ -1,8 +1,6 @@
 // VISION v-entire — see docs/vision-entire.md
-// Planned: scatter checkpoints→PRs bubble, unified timeline brush (syncId+Brush+?from=&to=), streak guard, token coach.
-// This header is vision-pointer only; implementation lands in next phases (entire.go -> api.go -> api.ts -> entire.tsx).
 import { useMemo, useState } from 'react'
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Scatter, ScatterChart, XAxis, YAxis, ZAxis } from 'recharts'
 import { Activity, Flame, RefreshCw, Zap } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
@@ -16,9 +14,9 @@ import {
   ChartContainer,
   ChartLegend,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
+import { TipShell, TipRow, getPayloadColor, ToggleLegend } from '@/components/chart-tips'
 import {
   Table,
   TableBody,
@@ -97,6 +95,67 @@ function shortDate(iso: string): string {
   })
 }
 
+function StackedAgentTip({ active, payload, label, hidden }: Partial<import('recharts').TooltipContentProps<number, string>> & { hidden?: Record<string, boolean> }) {
+  if (!active || !payload?.length) return null
+  const rows = payload.filter((e) => !hidden?.[String(e.dataKey)])
+  if (!rows.length) return null
+  const total = rows.reduce((s, e) => s + Number(e.value ?? 0), 0)
+  const hasMultiple = rows.length > 1
+  return (
+    <TipShell label={label}>
+      {rows
+        .filter((e) => Number(e.value ?? 0) > 0)
+        .sort((a, b) => Number(b.value ?? 0) - Number(a.value ?? 0))
+        .map((entry) => {
+          const key = String(entry.dataKey)
+          const col = getPayloadColor(entry) ?? agentColor(key)
+          return (
+            <TipRow key={key} color={col as string} label={agentLabel(key)} value={`${comma(Number(entry.value ?? 0))} cps`} />
+          )
+        })}
+      {hasMultiple ? (
+        <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
+          <span className="text-muted-foreground">Total</span>
+          <span className="font-mono font-medium tabular-nums">{comma(total)} checkpoints</span>
+        </div>
+      ) : null}
+    </TipShell>
+  )
+}
+function CountTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const v = Number(payload[0]?.value ?? 0)
+  if (!Number.isFinite(v)) return null
+  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col as string} label="Checkpoints" value={`${comma(v)}`} />
+    </TipShell>
+  )
+}
+function ScatterTip({ active, payload }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  // Scatter payload is nested: payload[0].payload is the original datum
+  const datum: any = (payload[0] as any)?.payload ?? payload[0]
+  if (!datum) return null
+  const repo = datum.repo ?? datum.short ?? "Repo"
+  const cps = datum.checkpoints ?? datum.bubbleSize ?? 0
+  const prs = datum.mergedCount ?? 0
+  const agent = datum.dominantAgent ?? "unknown"
+  const col = agentColor(agent) ?? "var(--chart-1)"
+  return (
+    <TipShell label={repo}>
+      <TipRow color={col as string} label={agentLabel(agent)} value={`${comma(cps)} cps`} />
+      <TipRow color={col as string} label="Merged PRs" value={`${comma(prs)}`} />
+      {typeof datum.cpPerPR === "number" ? (
+        <div className="text-[11px] text-muted-foreground">{datum.cpPerPR.toFixed(1)} cp/PR · bubble = checkpoints</div>
+      ) : null}
+    </TipShell>
+  )
+}
+
+
+
 function agentMixTotal(agent: EntireAgent): number {
   const mix = agent.me.toolMix
   if (!mix) return 0
@@ -130,6 +189,9 @@ export default function EntirePage() {
     for (const id of activeAgents) cfg[id] = { label: agentLabel(id), color: agentColor(id) }
     return cfg
   }, [activeAgents])
+
+  const [hiddenAgents, setHiddenAgents] = useState<Record<string, boolean>>({})
+  const toggleAgent = (key: string) => setHiddenAgents((h) => ({ ...h, [key]: !h[key] }))
 
   const dailyRows = useMemo(
     () =>
@@ -264,6 +326,77 @@ export default function EntirePage() {
         </div>
       ) : null}
 
+      {/* VISION Guard + Coach — see docs/vision-entire.md */}
+      {(data?.guard || data?.coach) ? (
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {data.guard ? (
+            <Card role="region" aria-label="Streak guard" className={data.guard.state==='at_risk' ? 'border-amber-200 bg-amber-50/50 dark:bg-amber-950/20' : data.guard.state==='safe' ? 'border-green-200' : ''}>
+              <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm font-semibold"><Flame className={"size-4 " + (data.guard.state==='safe' ? 'text-green-600' : data.guard.state==='at_risk' ? 'text-amber-600' : 'text-muted-foreground')} />Streak Guard <Badge variant={data.guard.state==='safe' ? 'secondary' : data.guard.state==='at_risk' ? 'destructive' : 'outline'} className={data.guard.state==='safe' ? 'bg-green-100 text-green-700' : ''}>{data.guard.state}</Badge></CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-xs">
+                <div className="grid grid-cols-3 gap-2">
+                  <div><div className="text-base font-semibold tabular-nums">{data.guard.currentStreak}d</div><div className="text-muted-foreground">current</div></div>
+                  <div><div className="text-base font-semibold tabular-nums">{data.guard.lifetimeStreak}d</div><div className="text-muted-foreground">lifetime</div></div>
+                  <div><div className="text-base font-semibold tabular-nums">{data.guard.hoursLeftUtc.toFixed(1)}h</div><div className="text-muted-foreground">left UTC</div></div>
+                </div>
+                <div className="text-muted-foreground">Last active {data.guard.lastActiveDate || '—'} · {data.guard.daysSinceActive}d ago · {data.guard.needToday ? 'need 1 checkpoint today' : 'checked in today'}</div>
+                <div className="font-medium">{data.guard.reason}</div>
+                <div className="text-[11px] text-muted-foreground">Throughput {data.guard.throughputHint} · state {data.guard.state} at 00:00 UTC</div>
+              </CardContent>
+            </Card>
+          ) : null}
+          {data.coach ? (
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm font-semibold"><Zap className="size-4 text-muted-foreground" />Token Coach <Badge variant={data.coach.byAgent.some((a:any)=>a.tier==='heavy') ? 'destructive' : data.coach.byAgent.some((a:any)=>a.tier==='moderate') ? 'secondary' : 'outline'} className={data.coach.rollupTokensPerCp>4000 ? '' : data.coach.rollupTokensPerCp>1500 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}>{data.coach.rollupTokensPerCp>4000 ? 'Heavy' : data.coach.rollupTokensPerCp>1500 ? 'Moderate' : 'Efficient'} · {Math.round(data.coach.rollupTokensPerCp)} tok/cp</Badge></CardTitle></CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                <div className="grid grid-cols-4 gap-2">
+                  <div><div className="text-base font-semibold tabular-nums">{Math.round(data.coach.rollupTokensPerCp)}</div><div className="text-muted-foreground">tok/cp</div></div>
+                  <div><div className="text-base font-semibold tabular-nums">{Math.round(data.coach.rollupTokensPerFile)}</div><div className="text-muted-foreground">tok/file</div></div>
+                  <div><div className="text-base font-semibold tabular-nums">{(data.coach.throughput*1000).toFixed(0)}</div><div className="text-muted-foreground">throughput</div></div>
+                  <div><div className="text-base font-semibold tabular-nums">{comma(data.coach.wastedEstTokens)}</div><div className="text-muted-foreground">overhead</div></div>
+                </div>
+                <div className="text-[11px] text-muted-foreground">{data.coach.summaryTip}</div>
+                <div className="space-y-1 max-h-[160px] overflow-auto">
+                  {data.coach.byAgent.slice(0,4).map((a:any)=>(
+                    <div key={a.agentId} className="flex items-center justify-between rounded border px-2 py-1">
+                      <span className="flex items-center gap-1.5 font-medium"><span className="size-2 rounded-full" style={{ background: agentColor(a.agentId) }} />{a.agentLabel} <span className="font-mono text-[11px] text-muted-foreground">{Math.round(a.tokensPerCp)} tok/cp</span></span>
+                      <Badge variant={a.tier==='heavy' ? 'destructive' : a.tier==='moderate' ? 'secondary' : 'outline'} className="px-1.5 py-0 text-[10px]">{a.tier}</Badge>
+                    </div>
+                  ))}
+                </div>
+                {data.coach.byAgent.some((a:any)=>a.tips.length>0) ? <div className="text-[11px] text-muted-foreground">Tips: {data.coach.byAgent.flatMap((a:any)=>a.tips).slice(0,2).join(' · ') || '—'}</div> : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* VISION Scatter checkpoints → PRs bubble — see docs/vision-entire.md */}
+      {data?.repoJoin && data.repoJoin.length>0 ? (
+        <Card className="mt-6">
+          <CardHeader><CardTitle className="text-sm font-semibold">Ship conversion — checkpoints → merged PRs · {data.repoJoin.length} repos · bubble = checkpoints · color = dominant agent</CardTitle></CardHeader>
+          <CardContent>
+            <ChartContainer config={activeAgents.reduce((acc:any,id:string)=>{acc[id]={label:agentLabel(id),color:agentColor(id)}; return acc;}, {} as any)} className="h-[320px] w-full">
+              <ScatterChart margin={{ left:12, right:12, top:8, bottom:8 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis type="number" dataKey="checkpoints" name="Checkpoints" tickFormatter={compact} label={{ value:'Checkpoints', position:'insideBottom', offset:-4 }} />
+                <YAxis type="number" dataKey="mergedCount" name="PRs" allowDecimals={false} label={{ value:'Merged PRs', angle:-90, position:'insideLeft' }} />
+                <ZAxis type="number" dataKey="bubbleSize" range={[60,400]} />
+                <ChartTooltip content={<ScatterTip />} />
+                <Scatter data={data.repoJoin} fill="var(--chart-1)" />
+              </ScatterChart>
+            </ChartContainer>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {data.repoJoin.slice(0,6).map((pt:any)=>(
+                <span key={pt.repo} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]">
+                  <span className="size-2 rounded-full" style={{ background: agentColor(pt.dominantAgent) }} />{pt.short} {pt.checkpoints}cps · {pt.mergedCount}PRs · {pt.cpPerPR.toFixed(1)} cp/PR
+                </span>
+              ))}
+            </div>
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">All-time cps vs window PRs · efficient upper-left · busy lower-right</p>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {stats ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard label="Avg tokens / checkpoint" value={compact(Math.round(stats.throughput * 1000))} />
@@ -296,10 +429,10 @@ export default function EntirePage() {
                   <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
                   <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} fontSize={11} />
                   <YAxis tickLine={false} axisLine={false} width={28} fontSize={11} allowDecimals={false} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <ChartLegend className="mt-2" />
+                  <ChartTooltip content={<StackedAgentTip hidden={hiddenAgents} />} />
+                  <ChartLegend content={<ToggleLegend hiddenSeries={hiddenAgents} onToggleSeries={toggleAgent} />} className="mt-2" />
                   {activeAgents.map((id) => (
-                    <Bar key={id} dataKey={id} stackId="cp" fill={agentColor(id)} />
+                    <Bar key={id} dataKey={id} stackId="cp" fill={agentColor(id)} hide={Boolean(hiddenAgents[id])} />
                   ))}
                 </BarChart>
               </ChartContainer>
@@ -319,9 +452,10 @@ export default function EntirePage() {
                   <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
                   <XAxis dataKey="hour" tickLine={false} axisLine={false} tickMargin={8} fontSize={11} interval={2} />
                   <YAxis tickLine={false} axisLine={false} width={28} fontSize={11} allowDecimals={false} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <ChartTooltip content={<StackedAgentTip hidden={hiddenAgents} />} />
+                  <ChartLegend content={<ToggleLegend hiddenSeries={hiddenAgents} onToggleSeries={toggleAgent} />} />
                   {activeAgents.map((id) => (
-                    <Bar key={id} dataKey={id} stackId="hr" fill={agentColor(id)} />
+                    <Bar key={id} dataKey={id} stackId="hr" fill={agentColor(id)} hide={Boolean(hiddenAgents[id])} />
                   ))}
                 </BarChart>
               </ChartContainer>
@@ -349,8 +483,8 @@ export default function EntirePage() {
                 <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
                 <XAxis dataKey="date" tickLine={false} axisLine={false} tickMargin={8} fontSize={11} interval={10} />
                 <YAxis tickLine={false} axisLine={false} width={28} fontSize={11} allowDecimals={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area dataKey="count" type="monotone" stroke="var(--chart-1)" fill="url(#fillCount)" strokeWidth={1.5} />
+                <ChartTooltip content={<CountTip />} />
+                <Area dataKey="count" name="Checkpoints" type="monotone" stroke="var(--chart-1)" fill="url(#fillCount)" strokeWidth={1.5} />
               </AreaChart>
             </ChartContainer>
           </CardContent>

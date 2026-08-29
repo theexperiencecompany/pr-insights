@@ -28,9 +28,9 @@ import {
   ChartLegend,
   ChartLegendContent,
   ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
+import { TipShell, TipRow, getPayloadColor, ToggleLegend } from '@/components/chart-tips'
 import {
   Table,
   TableBody,
@@ -86,32 +86,222 @@ const semanticPieConfig = SEM_TYPES.reduce((acc, t) => {
 }, {} as ChartConfig)
 const semanticAreaConfig = { ...semanticPieConfig } satisfies ChartConfig
 
+// --- Unified tooltip helpers (use TipShell+TipRow, color dot via p.color/p.stroke, dashed where needed) ---
+function MergedTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (entry?.value == null) return null
+  const col = getPayloadColor(entry) ?? "var(--chart-1)"
+  return (
+    <TipShell label={label}>
+      <TipRow color={col} label="Merged" value={`${comma(Number(entry.value))} PRs`} />
+    </TipShell>
+  )
+}
+function LinesStackedTip({ active, payload, label, hidden }: Partial<import('recharts').TooltipContentProps<number, string>> & { hidden?: Record<string, boolean> }) {
+  if (!active || !payload?.length) return null
+  const rows = payload.filter((e) => !hidden?.[String(e.dataKey)])
+  if (!rows.length) return null
+  const total = rows.reduce((s, e) => s + Number(e.value ?? 0), 0)
+  const nameMap: Record<string, string> = { additions: "Added", deletions: "Deleted" }
+  const fmtMap: Record<string, (v:number)=>string> = {
+    additions: (v) => `+${comma(Math.round(v))}`,
+    deletions: (v) => `−${comma(Math.round(v))}`,
+  }
+  return (
+    <TipShell label={label}>
+      {rows.map((entry) => {
+        const key = String(entry.dataKey)
+        const col = getPayloadColor(entry)
+        const fmt = fmtMap[key] ?? ((v:number)=>comma(Math.round(v)))
+        return <TipRow key={key} color={col} label={nameMap[key] ?? String(entry.name ?? key)} value={fmt(Number(entry.value ?? 0))} />
+      })}
+      <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
+        <span className="text-muted-foreground">Total</span>
+        <span className="font-mono font-medium tabular-nums">{comma(Math.round(total))} lines</span>
+      </div>
+    </TipShell>
+  )
+}
+function WeekdayTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (entry?.value == null) return null
+  return (
+    <TipShell label={label}>
+      <TipRow color={getPayloadColor(entry) ?? "var(--chart-1)"} label="Merged" value={`${comma(Number(entry.value))} PRs`} />
+    </TipShell>
+  )
+}
+function HourTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (entry?.value == null) return null
+  return (
+    <TipShell label={label}>
+      <TipRow color={getPayloadColor(entry) ?? "var(--chart-1)"} label="Merged" value={`${comma(Number(entry.value))} PRs`} />
+    </TipShell>
+  )
+}
+function SemanticPieTip({ active, payload }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (!entry?.value) return null
+  const col = getPayloadColor(entry) ?? (entry.payload as any)?.fill ?? "var(--chart-1)"
+  // entry.name is type, entry.value is count, payload has percent via entry.payload?.payload?.percent? Pie payload: entry.payload holds original datum with name/value/percent
+  const datum = (entry.payload as any) ?? {}
+  const percent = typeof datum.percent === "number" ? ` · ${datum.percent.toFixed(1)}%` : (typeof (entry.payload as any)?.payload?.percent === "number" ? ` · ${(entry.payload as any).payload.percent.toFixed(1)}%` : "")
+  // Try to read percent from original pieData: entry.payload may be {name, value, percent}
+  const pct = datum.percent != null ? datum.percent : ((entry as any).payload?.percent ?? null)
+  const pctText = typeof pct === "number" ? ` · ${pct.toFixed(1)}%` : percent
+  return (
+    <TipShell>
+      <TipRow color={col as string} label={String(entry.name ?? datum.name ?? "Type")} value={`${comma(Number(entry.value))} PRs${pctText}`} />
+    </TipShell>
+  )
+}
+function SemanticAreaTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const row = payload[0]?.payload as Record<string, number> | undefined
+  const t = row?.total as number ?? 0
+  return (
+    <TipShell label={`${String(label)} · ${comma(t)} PRs`}>
+      {payload
+        .filter((e) => e.value != null && Number(e.value) > 0)
+        .sort((a,b)=>Number(b.value)-Number(a.value))
+        .map((entry) => {
+          const k = String(entry.dataKey)
+          const col = getPayloadColor(entry) ?? (SEM_COLORS[k] ?? "var(--chart-1)")
+          const v = Number(entry.value ?? 0)
+          const pct = t > 0 ? (v / t) * 100 : 0
+          return <TipRow key={k} color={col as string} label={k} value={`${comma(v)} · ${pct.toFixed(0)}%`} />
+        })}
+      <div className="pt-1 text-[11px] text-muted-foreground">100% stacked — share of PR types per bucket</div>
+    </TipShell>
+  )
+}
+
+
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="text-sm font-semibold">{children}</div>
 }
 
-// Dense one-line stat strip: value + label in a single bordered row.
-function StatStrip({ data }: { data: OverviewData }) {
-  const cells: { label: string; value: string; className?: string }[] = [
-    { label: 'Pull requests', value: comma(data.stats.total) },
-    { label: 'Merged', value: comma(data.stats.merged), className: 'text-purple-600 dark:text-purple-400' },
-    { label: 'Open', value: comma(data.stats.open), className: 'text-green-600 dark:text-green-400' },
-    { label: 'Contributors', value: comma(data.contributors) },
-    { label: 'Lines added', value: compact(data.stats.additions), className: 'text-green-600 dark:text-green-400' },
-    { label: 'Lines deleted', value: compact(data.stats.deletions), className: 'text-red-600 dark:text-red-400' },
-    { label: 'Avg PR size', value: comma(Math.round(data.stats.avgDiff)) },
-    { label: 'Files changed', value: comma(data.stats.files) },
-  ]
+// VISION v-hero — see docs/vision-hero.md
+// Replaces StatStrip 8-cell lifetime strip with 4-tile windowed hero (90d cycle/throughput/bus, 30d CI).
+function HeroTiles({ data }: { data: OverviewData }) {
+  const hero = (data as any).hero as OverviewData['hero'] | undefined
+  if (!hero) {
+    return (
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i} className="rounded-[6px]">
+            <CardContent className="p-3">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">—</div>
+              <div className="mt-1 text-xl font-semibold tabular-nums">—</div>
+              <div className="text-[11px] text-muted-foreground">No data</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    )
+  }
+  const cycle = hero.cycle
+  const ci = hero.ci
+  const thr = hero.throughput
+  const bus = hero.bus
+  const cycleRisk = cycle.count === 0 ? 'empty' : cycle.count < 10 ? 'small' : cycle.p90 > 14 ? 'red' : cycle.p90 > 7 ? 'amber' : 'green'
+  const ciRisk = ci.total === 0 ? 'empty' : ci.total < 20 ? 'small' : ci.rate >= 90 ? 'green' : ci.rate >= 80 ? 'amber' : 'red'
+  const busRisk = bus.top3Share >= 70 ? 'High concentration' : bus.top3Share >= 50 ? 'Moderate' : 'Healthy'
+  const busColor = bus.top3Share >= 70 ? 'text-red-600 dark:text-red-400' : bus.top3Share >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'
+  const cycleColor = cycleRisk === 'red' ? 'text-red-600 dark:text-red-400' : cycleRisk === 'amber' ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'
+  const ciColor = ciRisk === 'red' ? 'text-red-600 dark:text-red-400' : ciRisk === 'amber' ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'
+  const thrDeltaLabel = thr.prevMerged === 0 && thr.merged > 0 ? 'New' : thr.prevMerged === 0 && thr.merged === 0 ? '—' : `${thr.deltaPct >= 0 ? '+' : ''}${thr.deltaPct.toFixed(0)}%`
+  const thrDeltaColor = thr.deltaPct > 0 ? 'text-green-600 dark:text-green-400' : thr.deltaPct < 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-border bg-border sm:grid-cols-4 xl:grid-cols-8">
-      {cells.map((c) => (
-        <div key={c.label} className="flex flex-col gap-0.5 bg-card px-3 py-2">
-          <span className={cn('text-base font-semibold leading-tight tabular-nums', c.className)}>
-            {c.value}
-          </span>
-          <span className="text-[11px] leading-tight text-muted-foreground">{c.label}</span>
-        </div>
-      ))}
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* Cycle tile */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Median cycle">
+            <CardContent className="flex flex-col gap-1 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cycle</span>
+                {cycle.count === 0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no data</Badge> : cycle.count < 10 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n={cycle.count} small</Badge> : cycleRisk === 'red' ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">p90&gt;14d</Badge> : cycleRisk === 'amber' ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/40">Watch</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge>}
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className={"text-xl font-semibold tabular-nums " + (cycle.count===0 ? 'text-muted-foreground' : cycleColor)}>{cycle.count===0 ? '—' : `${cycle.p50.toFixed(1)}d`}</span>
+                {cycle.count>0 ? <span className="text-xs text-muted-foreground">· p90 {cycle.p90.toFixed(1)}d</span> : null}
+              </div>
+              <div className="text-[11px] text-muted-foreground">{cycle.count===0 ? 'No merges in 90d' : `median · n=${cycle.count} · 90d`} {hero.windowNote ? <span className="rounded bg-muted px-1 py-0.5 text-[10px]">{hero.windowNote}</span> : null}</div>
+              {cycle.count>0 ? <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-[var(--chart-1)]" style={{ width: `${Math.min(100, (cycle.p50/7)*100)}%` }} /></div> : null}
+            </CardContent>
+          </Card>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[320px] text-xs leading-relaxed">
+          <div className="font-medium">Cycle p50 {cycle.p50.toFixed(1)}d · p90 {cycle.p90.toFixed(1)}d (n={cycle.count})</div>
+          <div>Median &amp; p90 days from CreatedAt → MergedAt in last 90d. Clamp negative to 0.</div>
+          <div className="text-[11px] opacity-70">Thresholds: p50 &lt;2d green, 2–4d amber, &gt;4d red · p90 &lt;7d green, 7–14d amber, &gt;14d red</div>
+        </TooltipContent>
+      </Tooltip>
+      {/* CI tile */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Card className="rounded-[6px] cursor-default" role="region" aria-label="CI success">
+            <CardContent className="flex flex-col gap-1 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">CI success</span>
+                {ci.total===0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no runs</Badge> : ci.total<20 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n&lt;20</Badge> : ci.rate>=90 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge> : ci.rate>=80 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700">Watch</Badge> : <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">Needs attention</Badge>}
+              </div>
+              <div className={"text-xl font-semibold tabular-nums " + (ci.total===0 ? 'text-muted-foreground' : ciColor)}>{ci.total===0 ? '—' : `${ci.rate.toFixed(0)}%`}</div>
+              <div className="text-[11px] text-muted-foreground">{ci.total===0 ? 'No CI runs in 30d' : `${ci.success} success · ${ci.failure} fail · 30d`}</div>
+              {ci.total>0 ? <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-2)]" style={{ width: `${ci.rate}%` }} /><div className="bg-[var(--chart-5)]" style={{ width: `${100-ci.rate}%` }} /></div> : null}
+            </CardContent>
+          </Card>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs"><div>Success / (success+failure) ×100 in last 30d. Excludes cancelled/skipped.</div></TooltipContent>
+      </Tooltip>
+      {/* Throughput tile */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Throughput">
+            <CardContent className="flex flex-col gap-1 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Throughput</span>
+                <span className={"flex items-center gap-1 text-xs font-semibold tabular-nums " + thrDeltaColor}>{thr.merged===0 ? '—' : thrDeltaLabel.includes('New') ? <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 px-1.5 py-0 text-[10px]">New</Badge> : <>{thr.deltaPct>0 ? <TrendingUp className="size-3.5" /> : thr.deltaPct<0 ? <TrendingDown className="size-3.5" /> : null}{thrDeltaLabel}</>}</span>
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-xl font-semibold tabular-nums">{thr.merged===0 ? '—' : `${thr.perWeek.toFixed(1)}/wk`}</span>
+                {thr.merged>0 ? <span className="text-xs text-muted-foreground">· {thr.perDay.toFixed(1)}/day</span> : null}
+              </div>
+              <div className="text-[11px] text-muted-foreground">{thr.merged===0 ? 'No merges in 28d' : `${thr.merged} in 28d vs ${thr.prevMerged} prior`}</div>
+            </CardContent>
+          </Card>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs"><div>{thr.merged} merged in last 28d vs {thr.prevMerged} prior 28d.</div></TooltipContent>
+      </Tooltip>
+      {/* Bus tile */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Bus share">
+            <CardContent className="flex flex-col gap-1 p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Bus share</span>
+                <span className={"text-[10px] font-medium " + busColor}>{busRisk}</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className={"text-xl font-semibold tabular-nums " + busColor}>{bus.top3Share.toFixed(0)}%</span>
+                <span className="text-[11px] text-muted-foreground">of merges by top 3</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {bus.top.slice(0,3).map((c:any)=>(<img key={c.login} src={avatarUrl(c.login)} alt={c.login} title={c.login} className="size-6 rounded-full ring-1 ring-border" loading="lazy" />))}
+                {bus.top.length===0 ? <span className="text-xs text-muted-foreground">No data</span> : null}
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-1)]" style={{ width: `${bus.top3Share.toFixed(0)}%` }} /></div>
+            </CardContent>
+          </Card>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs"><div>Top 3 authors share of merges in 90d window. High &gt;70% concentration.</div></TooltipContent>
+      </Tooltip>
     </div>
   )
 }
@@ -355,7 +545,7 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
             <div className="text-xs font-medium text-muted-foreground mb-2 text-center">Distribution (pie)</div>
             <ChartContainer config={semanticPieConfig} className="mx-auto aspect-square max-h-[260px]">
               <PieChart>
-                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <ChartTooltip content={<SemanticPieTip />} />
                 <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={52} outerRadius={88} paddingAngle={1}>
                   {pieData.map((entry) => (
                     <Cell key={entry.name} fill={SEM_COLORS[entry.name] ?? "var(--chart-1)"} stroke="var(--background)" strokeWidth={1} />
@@ -381,35 +571,7 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} interval="preserveStartEnd" />
                 <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
-                <ChartTooltip
-                  content={({ active, payload, label }) => {
-                    if (!active || !payload?.length) return null
-                    const row = payload[0]?.payload as Record<string, number> | undefined
-                    const t = row?.total as number ?? 0
-                    return (
-                      <div className="grid min-w-40 gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
-                        <div className="font-medium">{String(label)} · {comma(t)} PRs</div>
-                        {SEM_TYPES.filter((k) => (row?.[k] as number) > 0)
-                          .sort((a, b) => (row?.[b] as number) - (row?.[a] as number))
-                          .map((k) => {
-                            const v = (row?.[k] as number) ?? 0
-                            const pct = t > 0 ? (v / t) * 100 : 0
-                            return (
-                              <div key={k} className="flex items-center justify-between gap-4">
-                                <span className="flex items-center gap-1.5">
-                                  <span className="size-2 rounded-[2px]" style={{ background: SEM_COLORS[k] ?? "var(--chart-1)" }} />
-                                  <span className="text-muted-foreground">{k}</span>
-                                </span>
-                                <span className="font-mono font-medium tabular-nums">
-                                  {comma(v)} · {pct.toFixed(0)}%
-                                </span>
-                              </div>
-                            )
-                          })}
-                      </div>
-                    )
-                  }}
-                />
+                <ChartTooltip content={<SemanticAreaTip />} />
                 {SEM_TYPES.filter((t) => byType.some((b) => b.type === t)).map((t) => (
                   <Area key={t} type="monotone" dataKey={t} stackId="1" stroke={SEM_COLORS[t] ?? "var(--chart-1)"} fill={SEM_COLORS[t] ?? "var(--chart-1)"} fillOpacity={0.85} strokeWidth={1} />
                 ))}
@@ -541,10 +703,7 @@ function WhenWeShip({ data }: { data: OverviewData }) {
               <CartesianGrid vertical={false} />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={6} />
               <YAxis hide />
-              <ChartTooltip
-                cursor={{ fill: 'var(--muted)' }}
-                content={<ChartTooltipContent formatter={(v) => `${comma(Number(v))} merged`} />}
-              />
+              <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<WeekdayTip />} />
               <Bar dataKey="merged" fill="var(--color-weekday)" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ChartContainer>
@@ -589,10 +748,7 @@ function WhenWeShip({ data }: { data: OverviewData }) {
                 interval={3}
               />
               <YAxis hide />
-              <ChartTooltip
-                cursor={{ fill: 'var(--muted)' }}
-                content={<ChartTooltipContent formatter={(v) => `${comma(Number(v))} merged`} />}
-              />
+              <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<HourTip />} />
               <Bar dataKey="merged" fill="var(--color-hour)" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ChartContainer>
@@ -622,6 +778,8 @@ function OverviewContent({
     ? data.largest.filter(({ pull }) => !/release/i.test(pull.title))
     : data.largest
   ).slice(0, 5)
+  const [hiddenLines, setHiddenLines] = useState<Record<string, boolean>>({})
+  const toggleLines = (key: string) => setHiddenLines((h) => ({ ...h, [key]: !h[key] }))
 
   const isWeek = gran === 'week'
   const periodLabel = isWeek ? 'by week' : 'by month'
@@ -710,7 +868,7 @@ function OverviewContent({
 
   return (
     <div className="flex flex-col gap-4">
-      <StatStrip data={data} />
+      <HeroTiles data={data} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {data.velocity.map((v) => (
@@ -763,12 +921,7 @@ function OverviewContent({
                   width={40}
                   tickFormatter={(v) => compact(Number(v))}
                 />
-                <ChartTooltip
-                  cursor={{ stroke: 'var(--border)' }}
-                  content={
-                    <ChartTooltipContent formatter={(value) => `${comma(Number(value))} PRs`} />
-                  }
-                />
+                <ChartTooltip cursor={{ stroke: 'var(--border)' }} content={<MergedTip />} />
                 {yearBoundaries.map((x) => (
                   <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                 ))}
@@ -812,13 +965,13 @@ function OverviewContent({
                   width={40}
                   tickFormatter={(v) => compact(Number(v))}
                 />
-                <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<ChartTooltipContent />} />
+                <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<LinesStackedTip hidden={hiddenLines} />} />
                 {yearBoundaries.map((x) => (
                   <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                 ))}
-                <Bar dataKey="additions" stackId="lines" fill="var(--color-additions)" />
-                <Bar dataKey="deletions" stackId="lines" fill="var(--color-deletions)" />
-                <ChartLegend content={<ChartLegendContent />} />
+                <Bar dataKey="additions" name="Added" stackId="lines" fill="var(--color-additions)" hide={Boolean(hiddenLines.additions)} />
+                <Bar dataKey="deletions" name="Deleted" stackId="lines" fill="var(--color-deletions)" hide={Boolean(hiddenLines.deletions)} radius={[2, 2, 0, 0]} />
+                <ChartLegend content={<ToggleLegend hiddenSeries={hiddenLines} onToggleSeries={toggleLines} />} />
                 {hasBrush ? (
                   <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
                 ) : null}
@@ -855,7 +1008,7 @@ function OverviewContent({
       ) : null}
 
       {data.heatmap && data.heatmap.length > 0 ? (
-        <Card>
+        <Card className="@container overflow-hidden">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <SectionTitle>Activity · 365d · {comma(data.heatmap.reduce((s, d) => s + d.merged, 0))} merges</SectionTitle>
             {fromParam && toParam ? (
@@ -864,8 +1017,8 @@ function OverviewContent({
               </span>
             ) : null}
           </CardHeader>
-          <CardContent>
-            <Heatmap dates={data.heatmap} highlightFrom={highlightFrom} highlightTo={highlightTo} />
+          <CardContent className="w-full @container px-3 sm:px-4 [container-type:inline-size]">
+            <Heatmap dates={data.heatmap} highlightFrom={highlightFrom} highlightTo={highlightTo} className="w-full" />
           </CardContent>
         </Card>
       ) : null}
@@ -973,12 +1126,15 @@ export default function OverviewPage() {
     return (
       <div className="flex flex-col gap-4">
         <PageHeader title="Overview" description="Pull request activity across the organisation." />
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-[6px] border border-border bg-border sm:grid-cols-4 xl:grid-cols-8">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex flex-col gap-2 bg-card px-3 py-3">
-              <Skeleton className="h-5 w-12" />
-              <Skeleton className="h-3 w-20" />
-            </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="rounded-[6px]">
+              <CardContent className="flex flex-col gap-2 p-3">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-5 w-12" />
+                <Skeleton className="h-3 w-24" />
+              </CardContent>
+            </Card>
           ))}
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

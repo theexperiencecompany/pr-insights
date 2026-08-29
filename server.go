@@ -48,6 +48,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/contributors", s.handleAPIContributors)
 	mux.HandleFunc("GET /api/contributor", s.handleAPIContributor)
 	mux.HandleFunc("GET /api/insights", s.handleAPIInsights)
+	mux.HandleFunc("GET /api/hybrid", s.handleAPIHybrid)
+	mux.HandleFunc("GET /api/ci", s.handleAPIHybrid)
 	mux.HandleFunc("GET /api/workflow-runs", s.handleWorkflowRuns)
 	mux.HandleFunc("GET /api/pulls", s.handleAPIPulls)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -98,11 +100,76 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 
 // ---- Entire (agent checkpoint analytics) ----
 
+type BrushMeta struct {
+	MinDate string `json:"minDate"`
+	MaxDate string `json:"maxDate"`
+	From    string `json:"from,omitempty"`
+	To      string `json:"to,omitempty"`
+}
+
 func (s *Server) handleEntire(w http.ResponseWriter, r *http.Request) {
 	snap := s.entire.Snapshot()
+	storeSnap := s.store.Snapshot()
+	// Vision: join checkpoints->PRs, streak guard, token coach (+ brush meta) — in-memory derived, no new sync
+	var join []RepoJoinPoint
+	var guard *StreakGuard
+	var coach *TokenCoach
+	var brush *BrushMeta
+	if snap.Activity != nil && snap.Recap != nil {
+		join = EntireRepoJoin(snap.Activity, snap.Recap, storeSnap.Pulls, time.Time{}, time.Time{})
+		g := StreakGuardOf(snap.Activity.Stats, snap.Activity.Daily, time.Now().UTC())
+		guard = &g
+		c := TokenCoachOf(snap.Recap.Agents, snap.Activity.Stats)
+		coach = &c
+		if len(snap.Recap.Daily) > 0 {
+			minDate := snap.Recap.Daily[0].Date
+			maxDate := snap.Recap.Daily[0].Date
+			for _, d := range snap.Recap.Daily {
+				if d.Date < minDate {
+					minDate = d.Date
+				}
+				if d.Date > maxDate {
+					maxDate = d.Date
+				}
+			}
+			brush = &BrushMeta{MinDate: minDate, MaxDate: maxDate}
+		}
+	} else if snap.Activity != nil {
+		g := StreakGuardOf(snap.Activity.Stats, snap.Activity.Daily, time.Now().UTC())
+		guard = &g
+		if len(snap.Activity.Daily) > 0 {
+			minDate := snap.Activity.Daily[0].Date
+			maxDate := snap.Activity.Daily[0].Date
+			for _, d := range snap.Activity.Daily {
+				if d.Date < minDate {
+					minDate = d.Date
+				}
+				if d.Date > maxDate {
+					maxDate = d.Date
+				}
+			}
+			brush = &BrushMeta{MinDate: minDate, MaxDate: maxDate}
+		}
+	} else if snap.Recap != nil {
+		c := TokenCoachOf(snap.Recap.Agents, entireStats{})
+		coach = &c
+	}
+	ext := struct {
+		entireSnapshot
+		RepoJoin  []RepoJoinPoint `json:"repoJoin,omitempty"`
+		Guard     *StreakGuard    `json:"guard,omitempty"`
+		Coach     *TokenCoach     `json:"coach,omitempty"`
+		BrushMeta *BrushMeta      `json:"brushMeta,omitempty"`
+	}{
+		entireSnapshot: snap,
+		RepoJoin: join,
+		Guard: guard,
+		Coach: coach,
+		BrushMeta: brush,
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := json.NewEncoder(w).Encode(snap); err != nil {
+	if err := json.NewEncoder(w).Encode(ext); err != nil {
 		slog.Warn("encode entire payload", "err", err)
 	}
 }

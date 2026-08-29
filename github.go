@@ -505,6 +505,7 @@ func (s *Syncer) fetchRunsPage(ctx context.Context, repo string, page int, since
 			UpdatedAt:    ar.UpdatedAt,
 			RunStartedAt: ar.RunStartedAt,
 			DurationSec:  duration,
+			RunnerGroup:  InferRunnerGroup(ar.Name),
 		})
 	}
 	return runsPage{runs: runs, totalCount: resp.TotalCount}, nil
