@@ -2,12 +2,13 @@ import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 
-import { getPulls, getStatus, type Pull } from '@/lib/api'
-import { comma } from '@/lib/format'
+import { avatarUrl, getPulls, getStatus, type Pull } from '@/lib/api'
+import { comma, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
 
 import { EmptyState } from '@/components/empty-state'
+import { FilterBar } from '@/components/filter-bar'
 import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
 import { Pager } from '@/components/pager'
@@ -23,6 +24,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const STATE_OPTIONS = [
   { value: 'all', label: 'All' },
@@ -33,17 +43,15 @@ const STATE_OPTIONS = [
   { value: 'human', label: 'Humans only' },
 ] as const
 
-const SORT_OPTIONS = [
-  { value: 'updated', label: 'Recently updated' },
-  { value: 'created-asc', label: 'Oldest first' },
-  { value: 'created', label: 'Newest first' },
-  { value: 'diff', label: 'Diff size' },
+const SORT_TABS = [
+  { value: 'recent', label: 'Recent' },
+  { value: 'diff', label: 'Largest' },
   { value: 'files', label: 'Files' },
   { value: 'commits', label: 'Commits' },
   { value: 'timemerge', label: 'Time to merge' },
 ] as const
 
-const SORT_VALUES = ['diff', 'files', 'commits', 'timemerge']
+const SORT_VALUES = ['diff', 'files', 'commits', 'timemerge'] as const
 
 const SIZE_CLASSES: { label: string; className: string }[] = [
   { label: 'XS', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
@@ -70,6 +78,67 @@ function cycleDays(pull: Pull): string | null {
   const days = ms / 86_400_000
   const value = days >= 10 ? Math.round(days) : Math.round(days * 10) / 10
   return `cycle ${value}d`
+}
+
+function formatValue(metric: string, value: number): string {
+  switch (metric) {
+    case 'timemerge': {
+      const days = value / 24
+      if (days >= 10) return `${Math.round(days)}d`
+      if (days >= 1) return `${days.toFixed(1)}d`
+      return `${Math.round(value)}h`
+    }
+    case 'ageclose':
+      return `${Math.round(value)}d`
+    case 'commitsperfile':
+      return value.toFixed(1)
+    default:
+      return comma(value)
+  }
+}
+
+function metricLabel(metric: string): string {
+  switch (metric) {
+    case 'diff':
+      return 'Total lines'
+    case 'files':
+      return 'Files changed'
+    case 'commits':
+      return 'Commits'
+    case 'timemerge':
+      return 'Time to merge'
+    default:
+      return metric
+  }
+}
+
+function metricValue(pull: Pull, metric: string): number {
+  switch (metric) {
+    case 'diff':
+      return pull.additions + pull.deletions
+    case 'files':
+      return pull.changedFiles
+    case 'commits':
+      return pull.commits
+    case 'timemerge': {
+      if (!pull.mergedAt) return 0
+      return (new Date(pull.mergedAt).getTime() - new Date(pull.createdAt).getTime()) / 3_600_000
+    }
+    default:
+      return 0
+  }
+}
+
+function metricCell(pull: Pull, metric: string): ReactNode {
+  const v = metricValue(pull, metric)
+  switch (metric) {
+    case 'diff':
+      return <span className="font-semibold">{comma(v)}</span>
+    case 'timemerge':
+      return formatValue('timemerge', v)
+    default:
+      return comma(v)
+  }
 }
 
 function SummaryStrip({ rows }: { rows: Pull[] }) {
@@ -154,6 +223,9 @@ export default function PullsPage() {
     setQuery(qParam)
   }, [qParam])
 
+  const activeTab = SORT_TABS.some((t) => t.value === sortParam) ? sortParam : sortParam === '' ? 'recent' : SORT_VALUES.includes(sortParam as any) ? sortParam : 'recent'
+  const apiSort = activeTab === 'recent' ? undefined : activeTab
+
   const { data, loading, error } = useApi(
     () =>
       getPulls({
@@ -161,11 +233,11 @@ export default function PullsPage() {
         repo: repoParam === 'all' ? undefined : repoParam,
         q: qParam || undefined,
         page: page === 1 ? undefined : page,
-        sort: sortParam || undefined,
+        sort: apiSort || undefined,
         order: orderParam || undefined,
         bot: botParam || undefined,
       }),
-    [stateParam, repoParam, qParam, page, sortParam, orderParam, botParam],
+    [stateParam, repoParam, qParam, page, apiSort, orderParam, botParam],
   )
 
   const updateParams = (next: Record<string, string | null>) => {
@@ -194,22 +266,17 @@ export default function PullsPage() {
     updateParams(next)
   }
 
-  const handleSortChange = (value: string) => {
-    const next: Record<string, string | null> = { page: null }
-    if (value === 'updated') {
-      next.sort = null
-      next.order = null
-    } else if (value === 'created-asc') {
-      next.sort = 'created'
-      next.order = 'asc'
-    } else if (value === 'created') {
-      next.sort = 'created'
-      next.order = null
-    } else {
-      next.sort = value
-      next.order = null
-    }
-    updateParams(next)
+  const handleRepoChange = (value: string) => {
+    updateParams({ repo: value === 'all' ? null : value, page: null })
+  }
+
+  const handleClearFilters = () => {
+    updateParams({ repo: null, state: null, bot: null, q: null, page: null })
+    setQuery('')
+  }
+
+  const handleTabChange = (value: string) => {
+    updateParams({ sort: value === 'recent' ? null : value, order: null, page: null })
   }
 
   const handleSearch = (event: FormEvent) => {
@@ -223,14 +290,6 @@ export default function PullsPage() {
   }
 
   const stateValue = botParam === '1' || botParam === '0' ? (botParam === '1' ? 'bot' : 'human') : stateParam
-  const sortValue =
-    sortParam === 'created'
-      ? orderParam === 'asc'
-        ? 'created-asc'
-        : 'created'
-      : SORT_VALUES.includes(sortParam)
-        ? sortParam
-        : 'updated'
 
   const org = status?.org ?? ''
 
@@ -240,57 +299,150 @@ export default function PullsPage() {
   } else if (loading || !data) {
     content = <Loading />
   } else {
-    content = (
-      <>
-        {data.rows.length === 0 ? (
-          <EmptyState text="No pull requests match this filter." />
-        ) : (
-          <>
-            <SummaryStrip rows={data.rows} />
-            <Card>
-              {data.rows.map((pull) => {
-                const size = pull.additions + pull.deletions
-                const sizeInfo = sizeClass(size)
-                const cycle = cycleDays(pull)
-                return (
-                  <PrRow
-                    key={`${pull.repo}#${pull.number}`}
-                    pull={pull}
-                    extras={
-                      <>
-                        <span className="flex items-center gap-1.5">
-                          <span
-                            data-testid="size-chip"
-                            className={cn(
-                              'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
-                              sizeInfo.className,
-                            )}
-                          >
-                            {sizeInfo.label}
-                          </span>
-                          {cycle ? <span className="tabular-nums">{cycle}</span> : null}
-                          {pull.isBot ? (
-                            <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
-                              bot
-                            </span>
-                          ) : null}
-                          {pull.isDraft ? (
-                            <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
-                              draft
-                            </span>
-                          ) : null}
+    if (data.rows.length === 0) {
+      content = <EmptyState text="No pull requests match this filter." />
+    } else if (activeTab !== 'recent') {
+      const rankClass = (rank: number) =>
+        rank === 1
+          ? 'font-bold text-amber-500'
+          : rank === 2
+            ? 'font-bold text-zinc-400'
+            : rank === 3
+              ? 'font-bold text-orange-700 dark:text-orange-400'
+              : 'text-muted-foreground'
+      content = (
+        <>
+          <Card className="overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-14">Rank</TableHead>
+                  <TableHead>Pull request</TableHead>
+                  <TableHead>Author</TableHead>
+                  <TableHead className="text-right">Additions</TableHead>
+                  <TableHead className="text-right">Deletions</TableHead>
+                  <TableHead className="text-right bg-muted">{metricLabel(activeTab)}</TableHead>
+                  {activeTab !== 'files' && <TableHead className="text-right">Files</TableHead>}
+                  {activeTab !== 'commits' && <TableHead className="text-right">Commits</TableHead>}
+                  <TableHead className="text-right">Merged</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((pull, i) => {
+                  const rank = data.pager.from + i + 1
+                  return (
+                    <TableRow key={`${pull.repo}#${pull.number}`}>
+                      <TableCell className={cn(rankClass(rank))}>{rank}</TableCell>
+                      <TableCell>
+                        <a
+                          href={pull.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-semibold hover:text-blue-600 dark:hover:text-blue-400"
+                        >
+                          {pull.title}
+                        </a>
+                        <span className="text-muted-foreground">
+                          {' '}
+                          · {pull.repo}#{pull.number}
                         </span>
-                      </>
-                    }
-                  />
-                )
-              })}
-            </Card>
-          </>
-        )}
-        {data.pager.total > 0 ? <Pager pager={data.pager} onPage={handlePageChange} /> : null}
-      </>
-    )
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={avatarUrl(pull.author)}
+                            alt=""
+                            className="size-5 rounded-full"
+                            loading="lazy"
+                          />
+                          <a
+                            href={`https://github.com/${pull.author}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                          >
+                            {pull.author}
+                          </a>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
+                        +{comma(pull.additions)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-red-600 tabular-nums dark:text-red-400">
+                        −{comma(pull.deletions)}
+                      </TableCell>
+                      <TableCell className="text-right bg-muted font-semibold tabular-nums">
+                        {metricCell(pull, activeTab)}
+                      </TableCell>
+                      {activeTab !== 'files' && (
+                        <TableCell className="text-right tabular-nums">
+                          {comma(pull.changedFiles)}
+                        </TableCell>
+                      )}
+                      {activeTab !== 'commits' && (
+                        <TableCell className="text-right tabular-nums">
+                          {comma(pull.commits)}
+                        </TableCell>
+                      )}
+                      <TableCell className="whitespace-nowrap text-right text-muted-foreground">
+                        {formatDate(pull.mergedAt)}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+            <Pager pager={data.pager} onPage={handlePageChange} />
+          </Card>
+        </>
+      )
+    } else {
+      content = (
+        <>
+          <SummaryStrip rows={data.rows} />
+          <Card className="overflow-hidden">
+            {data.rows.map((pull) => {
+              const size = pull.additions + pull.deletions
+              const sizeInfo = sizeClass(size)
+              const cycle = cycleDays(pull)
+              return (
+                <PrRow
+                  key={`${pull.repo}#${pull.number}`}
+                  pull={pull}
+                  extras={
+                    <>
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          data-testid="size-chip"
+                          className={cn(
+                            'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
+                            sizeInfo.className,
+                          )}
+                        >
+                          {sizeInfo.label}
+                        </span>
+                        {cycle ? <span className="tabular-nums">{cycle}</span> : null}
+                        {pull.isBot ? (
+                          <span className="inline-flex h-4 items-center rounded-full bg-muted px-1.5 text-[10px] font-semibold text-muted-foreground">
+                            bot
+                          </span>
+                        ) : null}
+                        {pull.isDraft ? (
+                          <span className="inline-flex h-4 items-center rounded-full border border-border px-1.5 text-[10px] font-semibold text-muted-foreground">
+                            draft
+                          </span>
+                        ) : null}
+                      </span>
+                    </>
+                  }
+                />
+              )
+            })}
+            {data.pager.total > 0 ? <Pager pager={data.pager} onPage={handlePageChange} /> : null}
+          </Card>
+        </>
+      )
+    }
   }
 
   return (
@@ -303,7 +455,29 @@ export default function PullsPage() {
             : 'All pull requests across the organization, most recently updated first.'
         }
       />
-      <form onSubmit={handleSearch} className="mb-4 flex flex-wrap items-center gap-2">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="mb-4">
+        <TabsList className="w-full justify-start overflow-x-auto">
+          {SORT_TABS.map((t) => (
+            <TabsTrigger key={t.value} value={t.value} className="flex-none px-3">
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      <FilterBar>
+        <Select value={repoParam} onValueChange={handleRepoChange}>
+          <SelectTrigger aria-label="Filter by repository" className="max-w-44">
+            <SelectValue placeholder="All repos" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All repos</SelectItem>
+            {data?.repoOptions?.map((r) => (
+              <SelectItem key={r.name} value={r.name}>
+                {r.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={stateValue} onValueChange={handleStateChange}>
           <SelectTrigger aria-label="Filter by state">
             <SelectValue />
@@ -316,33 +490,28 @@ export default function PullsPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={sortValue} onValueChange={handleSortChange}>
-          <SelectTrigger aria-label="Sort by">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SORT_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by title or number"
-            aria-label="Search pull requests"
-            className="w-64 pl-8"
-          />
-        </div>
-        <Button type="submit">Search</Button>
-      </form>
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Search
+              aria-hidden
+              className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search by title or number"
+              aria-label="Search pull requests"
+              className="w-64 pl-8"
+            />
+          </div>
+          <Button type="submit">Search</Button>
+        </form>
+        {(repoParam !== 'all' || stateValue !== 'all' || qParam) && (
+          <Button variant="ghost" size="sm" onClick={handleClearFilters} className="ml-auto">
+            Clear
+          </Button>
+        )}
+      </FilterBar>
       {content}
     </>
   )

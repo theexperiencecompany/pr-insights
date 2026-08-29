@@ -294,7 +294,7 @@ func MonthlySeries(pulls []Pull) []ShipBucket {
 		key := p.MergedAt.UTC().Format("2006-01")
 		st := byMonth[key]
 		if st == nil {
-			st = &ShipBucket{Label: p.MergedAt.UTC().Format("Jan 06")}
+			st = &ShipBucket{Key: key, Label: p.MergedAt.UTC().Format("Jan 06")}
 			byMonth[key] = st
 			order = append(order, key)
 		}
@@ -407,6 +407,7 @@ func bucketKey(t time.Time, g Granularity) (key, label string) {
 
 // ShipBucket is one time bucket of merged-PR shipping activity.
 type ShipBucket struct {
+	Key             string  `json:"key"`
 	Label           string  `json:"label"`
 	Merged          int     `json:"merged"`
 	Additions       int     `json:"additions"`
@@ -423,7 +424,6 @@ func ShippingSeries(pulls []Pull, repo string, g Granularity, since time.Time) [
 
 // ShippingSeriesRange is ShippingSeries with an optional upper bound.
 func ShippingSeriesRange(pulls []Pull, repo string, g Granularity, from, to time.Time) []ShipBucket {
-	order := make([]string, 0)
 	byKey := make(map[string]*ShipBucket)
 	cycles := make(map[string][]float64)
 	floorKey := ""
@@ -447,14 +447,13 @@ func ShippingSeriesRange(pulls []Pull, repo string, g Granularity, from, to time
 		if floorKey != "" && key < floorKey {
 			continue
 		}
-		if ceilKey != "" && key >= ceilKey {
+		if ceilKey != "" && key > ceilKey {
 			continue
 		}
 		b := byKey[key]
 		if b == nil {
-			b = &ShipBucket{Label: label}
+			b = &ShipBucket{Key: key, Label: label}
 			byKey[key] = b
-			order = append(order, key)
 		}
 		b.Merged++
 		b.Additions += p.Additions
@@ -462,10 +461,71 @@ func ShippingSeriesRange(pulls []Pull, repo string, g Granularity, from, to time
 		cycles[key] = append(cycles[key], p.MergedAt.Sub(p.CreatedAt).Hours()/24)
 	}
 
-	sort.Strings(order)
-	out := make([]ShipBucket, 0, len(order))
-	for _, k := range order {
+	// Build continuous bucket list zero-filling missing with Label via bucketKey.
+	var keys []string
+	if !from.IsZero() && !to.IsZero() {
+		keys = continuousKeys(from, to, g)
+	} else if !from.IsZero() && to.IsZero() {
+		keys = continuousKeys(from, time.Now().UTC(), g)
+	} else if from.IsZero() && !to.IsZero() {
+		if len(byKey) > 0 {
+			var minKey string
+			for k := range byKey {
+				if minKey == "" || k < minKey {
+					minKey = k
+				}
+			}
+			var minTime time.Time
+			if g == GranWeek {
+				minTime, _ = time.Parse("2006-01-02", minKey)
+			} else {
+				minTime, _ = time.Parse("2006-01", minKey)
+			}
+			keys = continuousKeys(minTime, to, g)
+		}
+	} else {
+		if len(byKey) == 0 {
+			return nil
+		}
+		var minKey, maxKey string
+		for k := range byKey {
+			if minKey == "" || k < minKey {
+				minKey = k
+			}
+			if maxKey == "" || k > maxKey {
+				maxKey = k
+			}
+		}
+		var minTime, maxTime time.Time
+		if g == GranWeek {
+			minTime, _ = time.Parse("2006-01-02", minKey)
+			maxTime, _ = time.Parse("2006-01-02", maxKey)
+		} else {
+			minTime, _ = time.Parse("2006-01", minKey)
+			maxTime, _ = time.Parse("2006-01", maxKey)
+		}
+		keys = continuousKeys(minTime, maxTime, g)
+	}
+	if len(keys) == 0 {
+		keys = make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+	}
+	out := make([]ShipBucket, 0, len(keys))
+	for _, k := range keys {
 		b := byKey[k]
+		if b == nil {
+			var t time.Time
+			if g == GranWeek {
+				t, _ = time.Parse("2006-01-02", k)
+			} else {
+				t, _ = time.Parse("2006-01", k)
+			}
+			_, label := bucketKey(t, g)
+			b = &ShipBucket{Key: k, Label: label}
+		}
 		if c := cycles[k]; len(c) > 0 {
 			b.CycleMedianDays = medianFloat(c)
 			b.CycleCount = len(c)
@@ -484,8 +544,46 @@ func bucketKeyFloor(since time.Time, g Granularity) string {
 	return since.UTC().Format("2006-01")
 }
 
+// continuousKeys generates all bucket keys between from and to inclusive.
+// Week keys are Mondays formatted as "2006-01-02", month keys as "2006-01".
+func continuousKeys(from, to time.Time, g Granularity) []string {
+	if from.IsZero() || to.IsZero() {
+		return nil
+	}
+	fromUTC := from.UTC()
+	toUTC := to.UTC()
+	if g == GranWeek {
+		startKey, _ := bucketKey(fromUTC, GranWeek)
+		endKey, _ := bucketKey(toUTC, GranWeek)
+		start, err1 := time.Parse("2006-01-02", startKey)
+		end, err2 := time.Parse("2006-01-02", endKey)
+		if err1 != nil || err2 != nil || start.After(end) {
+			return nil
+		}
+		var keys []string
+		for cur := start; !cur.After(end); cur = cur.AddDate(0, 0, 7) {
+			keys = append(keys, cur.Format("2006-01-02"))
+		}
+		return keys
+	}
+	// month
+	startKey := fromUTC.Format("2006-01")
+	endKey := toUTC.Format("2006-01")
+	start, err1 := time.Parse("2006-01", startKey)
+	end, err2 := time.Parse("2006-01", endKey)
+	if err1 != nil || err2 != nil || start.After(end) {
+		return nil
+	}
+	var keys []string
+	for cur := start; !cur.After(end); cur = cur.AddDate(0, 1, 0) {
+		keys = append(keys, cur.Format("2006-01"))
+	}
+	return keys
+}
+
 // CIBucket is one time bucket of workflow-run activity.
 type CIBucket struct {
+	Key               string  `json:"key"`
 	Label             string  `json:"label"`
 	Total             int     `json:"total"`
 	Success           int     `json:"success"`
@@ -498,7 +596,6 @@ type CIBucket struct {
 
 // CISeries buckets workflow runs by run start time.
 func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucket {
-	order := make([]string, 0)
 	byKey := make(map[string]*CIBucket)
 	durations := make(map[string][]float64)
 
@@ -516,9 +613,8 @@ func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucke
 		}
 		b := byKey[key]
 		if b == nil {
-			b = &CIBucket{Label: label}
+			b = &CIBucket{Key: key, Label: label}
 			byKey[key] = b
-			order = append(order, key)
 		}
 		b.Total++
 		switch r.Conclusion {
@@ -535,10 +631,52 @@ func CISeries(runs []Run, repo string, g Granularity, since time.Time) []CIBucke
 		b.TotalMinutes += r.DurationSec / 60
 	}
 
-	sort.Strings(order)
-	out := make([]CIBucket, 0, len(order))
-	for _, k := range order {
+	var keys []string
+	if !since.IsZero() {
+		keys = continuousKeys(since, time.Now().UTC(), g)
+	} else {
+		if len(byKey) == 0 {
+			return nil
+		}
+		var minKey, maxKey string
+		for k := range byKey {
+			if minKey == "" || k < minKey {
+				minKey = k
+			}
+			if maxKey == "" || k > maxKey {
+				maxKey = k
+			}
+		}
+		var minTime, maxTime time.Time
+		if g == GranWeek {
+			minTime, _ = time.Parse("2006-01-02", minKey)
+			maxTime, _ = time.Parse("2006-01-02", maxKey)
+		} else {
+			minTime, _ = time.Parse("2006-01", minKey)
+			maxTime, _ = time.Parse("2006-01", maxKey)
+		}
+		keys = continuousKeys(minTime, maxTime, g)
+	}
+	if len(keys) == 0 {
+		keys = make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+	}
+	out := make([]CIBucket, 0, len(keys))
+	for _, k := range keys {
 		b := byKey[k]
+		if b == nil {
+			var t time.Time
+			if g == GranWeek {
+				t, _ = time.Parse("2006-01-02", k)
+			} else {
+				t, _ = time.Parse("2006-01", k)
+			}
+			_, label := bucketKey(t, g)
+			b = &CIBucket{Key: k, Label: label}
+		}
 		if denom := b.Success + b.Failure; denom > 0 {
 			b.SuccessRate = float64(b.Success) / float64(denom) * 100
 		}

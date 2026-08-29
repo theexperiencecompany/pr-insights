@@ -14,10 +14,21 @@ import (
 
 // VelocityDelta compares merged PRs in a period against the period before it.
 type VelocityDelta struct {
-	Label    string  `json:"label"` // "This week", "This month", "This year"
-	Current  int     `json:"current"`
-	Previous int     `json:"previous"`
-	DeltaPct float64 `json:"deltaPct"` // percent change; 100 when previous was 0
+	Label         string  `json:"label"` // "This week", "This month", "This year"
+	Current       int     `json:"current"`
+	Previous      int     `json:"previous"`
+	DeltaPct      float64 `json:"deltaPct"` // percent change; 0 when previous was 0 (use IsNew badge instead of 100%)
+	CurrentFrom   string  `json:"currentFrom"`   // YYYY-MM-DD inclusive start (UTC)
+	CurrentTo     string  `json:"currentTo"`     // YYYY-MM-DD inclusive end (UTC)
+	PreviousFrom  string  `json:"previousFrom"`  // YYYY-MM-DD inclusive start (UTC)
+	PreviousTo    string  `json:"previousTo"`    // YYYY-MM-DD inclusive end (UTC)
+	CurrentRange  string  `json:"currentRange"`  // human readable e.g. "Aug 25–29, 2026"
+	PreviousRange string  `json:"previousRange"` // human readable
+}
+
+// IsNew reports whether this delta is a "new" signal (no previous merges).
+func (v VelocityDelta) IsNew() bool {
+	return v.Previous == 0 && v.Current > 0
 }
 
 func startOfWeekUTC(t time.Time) time.Time {
@@ -40,8 +51,40 @@ func countMergedBetween(pulls []Pull, from, to time.Time) int {
 	return n
 }
 
+func isoDate(t time.Time) string {
+	return t.UTC().Format("2006-01-02")
+}
+
+// humanRange formats [from, toExclusive) as a human-readable inclusive range.
+// Examples: "Aug 25, 2026" (single day), "Aug 25–29, 2026" (same month), "Aug 25 – Sep 2, 2026" (cross month), "Dec 30, 2024 – Jan 5, 2025" (cross year).
+func humanRange(from, toExclusive time.Time) string {
+	if from.IsZero() || toExclusive.IsZero() {
+		return ""
+	}
+	fromUTC := from.UTC()
+	// inclusive end is the last instant before toExclusive
+	toInclusive := toExclusive.Add(-time.Nanosecond).UTC()
+	fromDate := time.Date(fromUTC.Year(), fromUTC.Month(), fromUTC.Day(), 0, 0, 0, 0, time.UTC)
+	toDate := time.Date(toInclusive.Year(), toInclusive.Month(), toInclusive.Day(), 0, 0, 0, 0, time.UTC)
+	if toDate.Before(fromDate) {
+		return fromDate.Format("Jan 2, 2006")
+	}
+	if fromDate.Equal(toDate) {
+		return fromDate.Format("Jan 2, 2006")
+	}
+	if fromDate.Year() == toDate.Year() && fromDate.Month() == toDate.Month() {
+		return fromDate.Format("Jan 2") + "–" + toDate.Format("2, 2006")
+	}
+	if fromDate.Year() == toDate.Year() {
+		return fromDate.Format("Jan 2") + " – " + toDate.Format("Jan 2, 2006")
+	}
+	return fromDate.Format("Jan 2, 2006") + " – " + toDate.Format("Jan 2, 2006")
+}
+
 // VelocityDeltas compares the current week/month/year against the previous
-// one, based on merged-PR counts.
+// one, based on merged-PR counts. DeltaPct is 0 when previous was 0 —
+// callers should render a "New" badge via VelocityDelta.IsNew() instead of
+// fabricating 100%.
 func VelocityDeltas(pulls []Pull) []VelocityDelta {
 	now := time.Now().UTC()
 	weekStart := startOfWeekUTC(now)
@@ -61,13 +104,39 @@ func VelocityDeltas(pulls []Pull) []VelocityDelta {
 		cur := countMergedBetween(pulls, p.cur, now)
 		prev := countMergedBetween(pulls, p.prev, p.cur)
 		pct := 0.0
-		switch {
-		case prev == 0 && cur > 0:
-			pct = 100
-		case prev > 0:
+		if prev > 0 {
 			pct = float64(cur-prev) / float64(prev) * 100
 		}
-		out = append(out, VelocityDelta{Label: p.label, Current: cur, Previous: prev, DeltaPct: pct})
+		// Inclusive dates for tooltip
+		currentFrom := isoDate(p.cur)
+		// currentTo is last included day (now - 1ns)
+		currentTo := ""
+		previousFrom := isoDate(p.prev)
+		previousTo := ""
+		currentRange := ""
+		previousRange := ""
+		if !p.cur.IsZero() && !now.IsZero() {
+			toInc := now.Add(-time.Nanosecond)
+			// if now is at 00:00 exactly, toInc is previous day; isoDate will reflect that
+			currentTo = isoDate(toInc)
+			currentRange = humanRange(p.cur, now)
+		}
+		if !p.prev.IsZero() && !p.cur.IsZero() {
+			previousTo = isoDate(p.cur.Add(-time.Nanosecond))
+			previousRange = humanRange(p.prev, p.cur)
+		}
+		out = append(out, VelocityDelta{
+			Label:         p.label,
+			Current:       cur,
+			Previous:      prev,
+			DeltaPct:      pct,
+			CurrentFrom:   currentFrom,
+			CurrentTo:     currentTo,
+			PreviousFrom:  previousFrom,
+			PreviousTo:    previousTo,
+			CurrentRange:  currentRange,
+			PreviousRange: previousRange,
+		})
 	}
 	return out
 }
@@ -75,22 +144,47 @@ func VelocityDeltas(pulls []Pull) []VelocityDelta {
 // ---- bot split ----
 
 var knownBotLogins = map[string]bool{
-	"dependabot": true, "renovate": true, "github-actions": true, "mintlify": true,
-	"vercel": true, "posthog": true, "sentry": true, "blacksmith-sh": true,
-	"snyk": true, "codecov": true, "sonarqube": true, "crowdin": true,
-	"weblate": true, "release-please": true, "semantic-release-bot": true,
-	"stale[bot]": true, "dependabot[bot]": true, "renovate[bot]": true,
-	"github-actions[bot]": true, "app/renovate": true,
+	// core package managers / CI
+	"dependabot": true, "dependabot[bot]": true, "renovate": true, "renovate[bot]": true,
+	"github-actions": true, "github-actions[bot]": true, "app/renovate": true,
+	// deployment / docs
+	"mintlify": true, "vercel": true, "vercel[bot]": true, "netlify": true, "netlify[bot]": true,
+	"posthog": true, "sentry": true, "blacksmith-sh": true,
+	// code quality / coverage
+	"snyk": true, "snyk-bot": true, "codecov": true, "codecov[bot]": true, "codecov-commenter": true,
+	"sonarqube": true, "sonarcloud": true, "sonarcloud[bot]": true, "sonarqube[bot]": true,
+	"codacy-bot": true, "codacy": true, "deepsource": true, "coveralls": true, "coveralls[bot]": true,
+	"lgtm-com": true, "lgtm[bot]": true,
+	// i18n / automation
+	"crowdin": true, "weblate": true, "release-please": true, "release-please[bot]": true,
+	"semantic-release-bot": true, "stale[bot]": true, "allcontributors[bot]": true,
+	"all-contributors[bot]": true, "imgbot": true, "imgbot[bot]": true,
+	// AI / review bots prevalent in the org and ecosystem
+	"copilot-swe-agent": true, "coderabbitai": true, "coderabbitai[bot]": true, "open-swe": true,
+	"greptile-apps": true, "greptile": true, "sweep[bot]": true, "sweep": true,
+	"cursor[bot]": true, "codex-bot": true,
+	// merge / bors
+	"bors[bot]": true, "bors": true, "mergify": true, "mergify[bot]": true, "kodiak[bot]": true,
+	// GitHub built-ins / cloud
+	"github-advanced-security[bot]": true, "github-code-scanning[bot]": true,
+	"cloudflare-pages[bot]": true, "cloudflare": true,
 }
 
 // IsBot classifies an author as automation: known bot logins plus the common
-// "-bot"/"[bot]"/"_bot" login suffixes.
+// "-bot"/"[bot]"/"_bot" login suffixes and well-known AI/review bot name patterns.
 func IsBot(login string) bool {
 	if knownBotLogins[login] {
 		return true
 	}
 	l := strings.ToLower(login)
-	return strings.HasSuffix(l, "-bot") || strings.HasSuffix(l, "[bot]") || strings.HasSuffix(l, "_bot")
+	if strings.HasSuffix(l, "-bot") || strings.HasSuffix(l, "[bot]") || strings.HasSuffix(l, "_bot") {
+		return true
+	}
+	// AI / review assistants that don't follow the *-bot convention
+	if strings.Contains(l, "coderabbit") || strings.Contains(l, "copilot") || strings.Contains(l, "greptile") || strings.Contains(l, "swe-agent") || strings.Contains(l, "open-swe") || strings.Contains(l, "cursor") || strings.Contains(l, "codex") {
+		return true
+	}
+	return false
 }
 
 // BotSplit splits merged PRs into automation and human contributions.
@@ -143,14 +237,13 @@ func ShipDistributionOf(pulls []Pull) ShipDistribution {
 		Hour:          make([]int, 24),
 		WeekdayLabels: []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"},
 	}
-	zoneName, _ := time.Now().Zone()
-	out.Zone = zoneName
+	out.Zone = "UTC"
 	for i := range pulls {
 		p := &pulls[i]
 		if p.State != "MERGED" || p.MergedAt == nil {
 			continue
 		}
-		t := p.MergedAt.In(time.Local)
+		t := p.MergedAt.UTC()
 		wd := (int(t.Weekday()) + 6) % 7 // Monday = 0
 		out.Weekday[wd]++
 		out.Hour[t.Hour()]++
@@ -271,6 +364,10 @@ type ContributorDetail struct {
 }
 
 func ContributorDetailOf(pulls []Pull, login string) ContributorDetail {
+	return ContributorDetailOfGran(pulls, login, GranMonth)
+}
+
+func ContributorDetailOfGran(pulls []Pull, login string, gran Granularity) ContributorDetail {
 	detail := ContributorDetail{Login: login, IsBot: IsBot(login)}
 	mine := make([]Pull, 0)
 	for _, p := range pulls {
@@ -285,7 +382,10 @@ func ContributorDetailOf(pulls []Pull, login string) ContributorDetail {
 	merged := PullsByState(mine, "MERGED")
 	SortPullsByMerged(merged)
 	detail.Merged = merged
-	detail.Monthly = ShippingSeries(mine, "", GranMonth, time.Time{})
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	detail.Monthly = ShippingSeries(mine, "", gran, time.Time{})
 	detail.Heatmap = Heatmap(mine, login, 365)
 	return detail
 }

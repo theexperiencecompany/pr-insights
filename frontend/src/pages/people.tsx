@@ -39,7 +39,7 @@ function SectionTitle({ children }: { children: string }) {
 
 const RANK_CLASS = ['text-amber-500', 'text-zinc-400', 'text-orange-700 dark:text-orange-400']
 
-export default function ContributorsPage() {
+export default function PeoplePage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const repoParam = searchParams.get('repo') ?? 'all'
   const qParam = searchParams.get('q') ?? ''
@@ -104,7 +104,6 @@ export default function ContributorsPage() {
 
   const rows = data.rows
   const totalMerged = rows.reduce((s, c) => s + c.merged, 0)
-  // For bus factor we use the first page's rows to compute top3 share, but ideally use all
   const top3 = rows.slice(0, 3)
   const top3Share = totalMerged > 0 ? (top3.reduce((s, c) => s + c.merged, 0) / totalMerged) * 100 : 0
   const top10 = rows.slice(0, 10)
@@ -113,7 +112,7 @@ export default function ContributorsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="Contributors" description="Ranked by merged pull requests." />
+      <PageHeader title="People" description="Ranked by merged pull requests." />
 
       <FilterBar>
         <Select value={repoParam} onValueChange={handleRepoChange}>

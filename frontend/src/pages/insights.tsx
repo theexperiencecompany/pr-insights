@@ -10,6 +10,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   XAxis,
   YAxis,
@@ -17,10 +18,12 @@ import {
 import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, Loader2, XCircle } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
+import { FilterBar } from '@/components/filter-bar'
 import { PageHeader } from '@/components/page-header'
 import { StatCard } from '@/components/stat-card'
 import { getInsights, getStatus, getWorkflowRuns, type WorkflowRun, type WorkflowStat } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
@@ -363,8 +366,9 @@ export default function InsightsPage() {
   const period: Period = PERIODS.includes(rawPeriod as Period) ? (rawPeriod as Period) : '6m'
   const rawGran = searchParams.get('gran')
   const gran: Gran = GRANS.includes(rawGran as Gran) ? (rawGran as Gran) : 'month'
+  const repoParam = searchParams.get('repo') ?? 'all'
 
-  const { data, loading, error } = useApi(() => getInsights({ period, gran }), [period, gran])
+  const { data, loading, error } = useApi(() => getInsights({ repo: repoParam === 'all' ? undefined : repoParam, period, gran }), [repoParam, period, gran])
   const isInitialLoading = loading && !data
   const isReloading = loading && !!data
   const { data: status } = useApi(getStatus)
@@ -391,6 +395,10 @@ export default function InsightsPage() {
     if (value) next.set(key, value)
     else next.delete(key)
     setSearchParams(next)
+  }
+
+  const handleRepoChange = (value: string) => {
+    updateParam('repo', value === 'all' ? '' : value)
   }
 
   // Weekly tickFormatter 'Jan 2 ’26' when year!=current + ReferenceLine Jan-1 helpers
@@ -451,6 +459,57 @@ export default function InsightsPage() {
     if (toKey) next.set('to', String(toKey))
     setSearchParams(next, { replace: true })
   }
+
+  // zero-fill helpers: longest zero-streak and gap dots
+  const shipZeroStreak = useMemo(() => {
+    if (!data?.ship?.length) return { longest: 0, current: 0, label: '' }
+    let longest = 0
+    let cur = 0
+    let curStart = -1
+    let bestStart = -1
+    let bestEnd = -1
+    for (let i = 0; i < data.ship.length; i++) {
+      if (data.ship[i].merged === 0) {
+        if (cur === 0) curStart = i
+        cur++
+        if (cur > longest) {
+          longest = cur
+          bestStart = curStart
+          bestEnd = i
+        }
+      } else {
+        cur = 0
+      }
+    }
+    let trailing = 0
+    for (let i = data.ship.length - 1; i >= 0 && data.ship[i].merged === 0; i--) trailing++
+    const label = longest > 0 && bestStart >= 0 ? `${(data.ship[bestStart] as any)?.label} → ${(data.ship[bestEnd] as any)?.label}` : ''
+    return { longest, current: trailing, label }
+  }, [data])
+
+  const ciMedianRate = useMemo(() => {
+    if (!data?.ci?.length) return 0
+    const vals = data.ci.filter((b) => b.total > 0).map((b) => b.successRate).filter((v) => Number.isFinite(v)).sort((a, b) => a - b)
+    if (!vals.length) return 0
+    const mid = Math.floor(vals.length / 2)
+    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
+  }, [data])
+
+  const ciMedianDuration = useMemo(() => {
+    if (!data?.ci?.length) return 0
+    const vals = data.ci.map((b) => b.medianDurationMin).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b)
+    if (!vals.length) return 0
+    const mid = Math.floor(vals.length / 2)
+    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
+  }, [data])
+
+  const cycleMedian = useMemo(() => {
+    if (!data?.ship?.length) return 0
+    const vals = data.ship.map((b) => b.cycleMedianDays).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b)
+    if (!vals.length) return 0
+    const mid = Math.floor(vals.length / 2)
+    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
+  }, [data])
 
   const linesData = useMemo(
     () => data?.ship.map((b) => ({ label: b.label, lines: b.additions + b.deletions })) ?? [],
@@ -675,7 +734,20 @@ export default function InsightsPage() {
     <>
       <PageHeader title="Insights" description="Ship velocity and CI health" />
 
-      <div className="mb-6 flex flex-wrap items-center gap-x-5 gap-y-3">
+      <FilterBar>
+        <Select value={repoParam} onValueChange={handleRepoChange}>
+          <SelectTrigger size="sm" aria-label="Filter by repository" className="max-w-44">
+            <SelectValue placeholder="All repos" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All repos</SelectItem>
+            {data?.repoOptions?.map((r) => (
+              <SelectItem key={r.name} value={r.name}>
+                {r.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Filter label="Period">
           <Select value={period} onValueChange={(v) => updateParam('period', v)}>
             <SelectTrigger size="sm" className="min-w-36">
@@ -701,7 +773,12 @@ export default function InsightsPage() {
             </SelectContent>
           </Select>
         </Filter>
-      </div>
+        {(repoParam !== 'all') && (
+          <Button variant="ghost" size="sm" onClick={() => handleRepoChange('all')} className="ml-auto">
+            Clear
+          </Button>
+        )}
+      </FilterBar>
 
       {isInitialLoading ? (
         <div className="space-y-4">
@@ -738,6 +815,11 @@ export default function InsightsPage() {
             )}
             <>
           <SectionHeading>Shipping</SectionHeading>
+          {shipZeroStreak.longest > 0 && (
+            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              Longest zero-streak: {shipZeroStreak.longest} {gran === 'week' ? 'weeks' : 'months'} with no merges{shipZeroStreak.label ? ` (${shipZeroStreak.label})` : ''} · current trailing: {shipZeroStreak.current}
+            </div>
+          )}
           {searchParams.get('from') && searchParams.get('to') ? (
             <div className="mt-2 text-[11px] text-muted-foreground">
               Highlighting {searchParams.get('from')} → {searchParams.get('to')}{' '}
@@ -794,6 +876,8 @@ export default function InsightsPage() {
                         stroke="var(--color-merged)"
                         strokeWidth={2}
                         fill="url(#fillMerged)"
+                        connectNulls={false}
+                        dot={{ r: 2, stroke: "var(--color-merged)", fill: "var(--background)" }}
                         activeDot={{ r: 4 }}
                         hide={Boolean(hidden.merged)}
                       />
@@ -805,6 +889,7 @@ export default function InsightsPage() {
                         stroke="var(--color-ma)"
                         strokeWidth={1.5}
                         dot={false}
+                        connectNulls={false}
                         activeDot={false}
                         hide={Boolean(hidden.ma)}
                       />
@@ -818,6 +903,7 @@ export default function InsightsPage() {
                           strokeWidth={1.5}
                           strokeDasharray="4 4"
                           dot={false}
+                          connectNulls={false}
                           activeDot={false}
                           hide={Boolean(hidden.prev)}
                         />
@@ -833,6 +919,7 @@ export default function InsightsPage() {
                           strokeDasharray="6 3"
                           strokeOpacity={0.6}
                           dot={false}
+                          connectNulls={false}
                           activeDot={false}
                           hide={Boolean(hidden.forecast)}
                           style={{ opacity: 0.6 } as React.CSSProperties}
@@ -896,6 +983,8 @@ export default function InsightsPage() {
                         stroke="var(--color-lines)"
                         strokeWidth={2}
                         fill="url(#fillLines)"
+                        connectNulls={false}
+                        dot={{ r: 2, stroke: "var(--color-lines)", fill: "var(--background)" }}
                         activeDot={{ r: 4 }}
                       />
                       {data && data.ship.length > 6 ? (
@@ -928,13 +1017,17 @@ export default function InsightsPage() {
                         <ReferenceLine key={x} x={x} stroke="var(--border)" strokeDasharray="3 3" />
                       ))}
                       <ChartTooltip content={<SeriesTip />} />
+                      {cycleMedian > 0 && (
+                        <ReferenceLine y={cycleMedian} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `median ${cycleMedian.toFixed(1)}d`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />
+                      )}
                       <Line
                         type="monotone"
                         isAnimationActive={false}
                         dataKey="cycle"
                         stroke="var(--color-cycle)"
                         strokeWidth={2}
-                        dot={false}
+                        dot={{ r: 2, stroke: "var(--color-cycle)", fill: "var(--background)" }}
+                        connectNulls={false}
                         activeDot={{ r: 4 }}
                       />
                       {data && data.ship.length > 6 ? (
@@ -1083,13 +1176,19 @@ export default function InsightsPage() {
                         tickFormatter={(v: number) => `${v}%`}
                       />
                       <ChartTooltip content={<RateTip />} />
+                      <ReferenceArea y1={90} y2={100} fill="var(--chart-2)" fillOpacity={0.08} strokeOpacity={0} />
+                      {ciMedianRate > 0 && (
+                        <ReferenceLine y={ciMedianRate} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `median ${ciMedianRate.toFixed(1)}%`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />
+                      )}
+                      <ReferenceLine y={90} stroke="var(--chart-3)" strokeDasharray="4 4" label={{ value: "SLO 90%", position: "insideBottomRight", fill: "var(--chart-3)", fontSize: 10 }} />
                       <Line
                         type="monotone"
                         isAnimationActive={false}
                         dataKey="successRate"
                         stroke="var(--color-rate)"
                         strokeWidth={2}
-                        dot={false}
+                        dot={{ r: 2, stroke: "var(--color-rate)", fill: "var(--background)" }}
+                        connectNulls={false}
                         activeDot={{ r: 4 }}
                       />
                     </LineChart>
@@ -1151,13 +1250,17 @@ export default function InsightsPage() {
                         tickFormatter={(v: number) => `${v}m`}
                       />
                       <ChartTooltip content={<DurationTip />} />
+                      {ciMedianDuration > 0 && (
+                        <ReferenceLine y={ciMedianDuration} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `median ${fmtDuration(ciMedianDuration)}`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />
+                      )}
                       <Line
                         type="monotone"
                         isAnimationActive={false}
                         dataKey="medianDurationMin"
                         stroke="var(--color-duration)"
                         strokeWidth={2}
-                        dot={false}
+                        dot={{ r: 2, stroke: "var(--color-duration)", fill: "var(--background)" }}
+                        connectNulls={false}
                         activeDot={{ r: 4 }}
                       />
                     </LineChart>

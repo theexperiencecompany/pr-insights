@@ -14,6 +14,7 @@ import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
 
 import { EmptyState } from '@/components/empty-state'
+import { DatePresets, FilterBar } from '@/components/filter-bar'
 import { Loading } from '@/components/loading'
 import { PageHeader } from '@/components/page-header'
 import { Pager } from '@/components/pager'
@@ -140,6 +141,7 @@ export default function LeaderboardsPage() {
   const state = STATES.some((s) => s.value === stateParam) ? stateParam : 'merged'
   const order = searchParams.get('order') === 'asc' ? 'asc' : 'desc'
   const authorParam = searchParams.get('author') ?? 'all'
+  const repoParam = searchParams.get('repo') ?? 'all'
   const fromParam = searchParams.get('from') ?? ''
   const toParam = searchParams.get('to') ?? ''
   const pageParam = searchParams.get('page')
@@ -154,11 +156,12 @@ export default function LeaderboardsPage() {
         state,
         order,
         page,
+        repo: repoParam === 'all' ? undefined : repoParam,
         author: authorParam === 'all' ? undefined : authorParam,
         from: fromParam || undefined,
         to: toParam || undefined,
       }),
-    [metric, state, order, authorParam, fromParam, toParam, page],
+    [metric, state, order, repoParam, authorParam, fromParam, toParam, page],
   )
 
   const { data: contributors } = useApi(getContributors)
@@ -187,6 +190,10 @@ export default function LeaderboardsPage() {
     updateParams({ author: value === 'all' ? null : value, page: null })
   }
 
+  const handleRepoChange = (value: string) => {
+    updateParams({ repo: value === 'all' ? null : value, page: null })
+  }
+
   const handleFromChange = (value: string) => {
     updateParams({ from: value || null, page: null })
   }
@@ -197,6 +204,10 @@ export default function LeaderboardsPage() {
 
   const handleOrderToggle = () => {
     updateParams({ order: order === 'asc' ? null : 'asc', page: null })
+  }
+
+  const handleClearFilters = () => {
+    updateParams({ repo: null, author: null, state: null, from: null, to: null, order: null, page: null })
   }
 
   const handlePageChange = (nextPage: number) => {
@@ -215,6 +226,7 @@ export default function LeaderboardsPage() {
           state,
           order,
           page: p,
+          repo: repoParam === 'all' ? undefined : repoParam,
           author: authorParam === 'all' ? undefined : authorParam,
           from: fromParam || undefined,
           to: toParam || undefined,
@@ -293,7 +305,20 @@ export default function LeaderboardsPage() {
         </TabsList>
       </Tabs>
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <FilterBar>
+        <Select value={repoParam} onValueChange={handleRepoChange}>
+          <SelectTrigger aria-label="Filter by repository" className="max-w-44">
+            <SelectValue placeholder="All repos" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All repos</SelectItem>
+            {data?.repoOptions?.map((r) => (
+              <SelectItem key={r.name} value={r.name}>
+                {r.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={state} onValueChange={handleStateChange}>
           <SelectTrigger aria-label="Filter by state">
             <SelectValue />
@@ -325,7 +350,7 @@ export default function LeaderboardsPage() {
           onChange={(event) => handleFromChange(event.target.value)}
           aria-label="From"
           title="Merged after this date"
-          className="w-40"
+          className="w-36"
         />
         <Input
           type="date"
@@ -333,8 +358,9 @@ export default function LeaderboardsPage() {
           onChange={(event) => handleToChange(event.target.value)}
           aria-label="To"
           title="Merged before this date"
-          className="w-40"
+          className="w-36"
         />
+        <DatePresets from={fromParam} to={toParam} onFromChange={handleFromChange} onToChange={handleToChange} />
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -350,7 +376,12 @@ export default function LeaderboardsPage() {
             <TooltipContent>{order === 'asc' ? 'Descending' : 'Ascending'}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-      </div>
+        {(repoParam !== 'all' || authorParam !== 'all' || fromParam || toParam || order === 'asc' || state !== 'merged') && (
+          <Button variant="ghost" size="sm" onClick={handleClearFilters} className="ml-auto">
+            Clear
+          </Button>
+        )}
+      </FilterBar>
 
       <Card size="sm" className="overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
@@ -385,7 +416,7 @@ export default function LeaderboardsPage() {
                     <TableHead className="text-right">Additions</TableHead>
                   )}
                   {metric !== 'deletions' && <TableHead className="text-right">Deletions</TableHead>}
-                  <TableHead className="text-right">{metricCol(metric).label}</TableHead>
+                  <TableHead className="text-right bg-muted">{metricCol(metric).label}</TableHead>
                   {metric !== 'files' && <TableHead className="text-right">Files</TableHead>}
                   {metric !== 'commits' && <TableHead className="text-right">Commits</TableHead>}
                   <TableHead className="text-right">Merged</TableHead>
@@ -439,7 +470,7 @@ export default function LeaderboardsPage() {
                           −{comma(row.pull.deletions)}
                         </TableCell>
                       )}
-                      <TableCell className="text-right font-semibold tabular-nums">
+                      <TableCell className="text-right bg-muted font-semibold tabular-nums">
                         {metricCol(metric).cell(row)}
                       </TableCell>
                       {metric !== 'files' && (

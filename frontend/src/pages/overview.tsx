@@ -193,29 +193,37 @@ function VelocityCard({ v }: { v: OverviewData['velocity'][number] }) {
   )
 }
 
-function BotBusCard({ data }: { data: OverviewData }) {
-  const { bot, bus } = data
+function AutomationCard({ data }: { data: OverviewData }) {
+  const { bot } = data
   const total = bot.humanMerged + bot.botMerged
   const humanPct = total > 0 ? ((bot.humanMerged / total) * 100).toFixed(0) : '0'
   const botPct = total > 0 ? ((bot.botMerged / total) * 100).toFixed(0) : '0'
   return (
     <Card className="rounded-[6px]">
-      <CardContent className="flex h-full flex-col justify-center gap-3 p-4">
+      <CardHeader className="pb-2">
+        <SectionTitle>Automation</SectionTitle>
+        <span className="text-xs text-muted-foreground">
+          {bot.bots.length ? `${bot.bots.length} bot${bot.bots.length > 1 ? 's' : ''} · ` : ''}
+          {comma(total)} merged
+        </span>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
         <div>
-          <div className="text-xs font-medium text-muted-foreground">
-            Bot vs human merges
-          </div>
-          <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-muted">
+          <div className="mt-1 flex h-2 overflow-hidden rounded-full bg-muted">
             <div className="bg-[var(--chart-2)]" style={{ width: `${humanPct}%` }} />
             <div className="bg-[var(--chart-5)]" style={{ width: `${botPct}%` }} />
           </div>
-          <div className="mt-1.5 flex justify-between text-xs tabular-nums text-muted-foreground">
-            <span className="text-green-600 dark:text-green-400">
-              Humans {comma(bot.humanMerged)} ({humanPct}%)
+          <div className="mt-2 flex justify-between text-xs tabular-nums text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block size-2 rounded-full bg-[var(--chart-2)]" />
+              <span className="text-green-600 dark:text-green-400">
+                Humans {comma(bot.humanMerged)} ({humanPct}%)
+              </span>
             </span>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="cursor-default">
+                <span className="cursor-default flex items-center gap-1.5">
+                  <span className="inline-block size-2 rounded-full bg-[var(--chart-5)]" />
                   Bots {comma(bot.botMerged)} ({botPct}%)
                 </span>
               </TooltipTrigger>
@@ -225,22 +233,59 @@ function BotBusCard({ data }: { data: OverviewData }) {
             </Tooltip>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex -space-x-1.5">
-            {bus.top.map((c) => (
-              <img
-                key={c.login}
-                src={avatarUrl(c.login)}
-                alt=""
-                className="size-5 rounded-full ring-2 ring-card"
-                loading="lazy"
-              />
+        {bot.bots.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {bot.bots.map((b) => (
+              <Badge key={b} variant="secondary" className="px-1.5 py-0 text-[11px] font-medium">
+                {b}
+              </Badge>
             ))}
           </div>
-          <span className="text-xs text-muted-foreground">
-            Top 3 authors ship <span className="font-semibold text-foreground">{bus.top3Share.toFixed(0)}%</span>{' '}
-            of merges
-          </span>
+        ) : (
+          <p className="text-xs text-muted-foreground">No bot merges in this period.</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function BusCard({ data }: { data: OverviewData }) {
+  const { bus } = data
+  const riskLabel =
+    bus.top3Share >= 70 ? 'High concentration' : bus.top3Share >= 50 ? 'Moderate' : 'Healthy'
+  const riskColor =
+    bus.top3Share >= 70
+      ? 'text-red-600 dark:text-red-400'
+      : bus.top3Share >= 50
+        ? 'text-amber-600 dark:text-amber-400'
+        : 'text-green-600 dark:text-green-400'
+  return (
+    <Card className="rounded-[6px]">
+      <CardHeader className="pb-2">
+        <SectionTitle>Bus factor</SectionTitle>
+        <span className={"text-xs font-medium " + riskColor}>{riskLabel}</span>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-semibold tabular-nums">{bus.top3Share.toFixed(0)}%</span>
+            <span className="text-xs text-muted-foreground">of merges by top 3 authors</span>
+          </div>
+          <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-muted">
+            <div className="bg-[var(--chart-1)]" style={{ width: `${bus.top3Share.toFixed(0)}%` }} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-2">
+          {bus.top.map((c) => (
+            <div key={c.login} className="flex items-center gap-2 text-xs">
+              <img src={avatarUrl(c.login)} alt="" className="size-6 rounded-full ring-1 ring-border" loading="lazy" />
+              <span className="font-medium">{c.login}</span>
+              <span className="ml-auto tabular-nums text-muted-foreground">{comma(c.merged)} merges</span>
+            </div>
+          ))}
+          {bus.top.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No contributor data.</p>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -692,6 +737,11 @@ function OverviewContent({
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <AutomationCard data={data} />
+        <BusCard data={data} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <SectionTitle>Top contributors</SectionTitle>
@@ -767,8 +817,6 @@ function OverviewContent({
           </Table>
         </Card>
       </div>
-
-      <BotBusCard data={data} />
     </div>
   )
 }

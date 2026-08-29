@@ -368,9 +368,115 @@ func (s *Server) handleAPIShame(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Snapshot()
+	repo := r.URL.Query().Get("repo")
+	q := r.URL.Query().Get("q")
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	page := queryInt(r, "page", 1)
+
+	// Filter pulls by repo and date range before aggregating.
+	pulls := snap.Pulls
+	if repo != "" {
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			if p.Repo == repo {
+				filtered = append(filtered, p)
+			}
+		}
+		pulls = filtered
+	}
+	var fromT, toT time.Time
+	if fromStr != "" {
+		fromT, _ = time.Parse("2006-01-02", fromStr)
+	}
+	if toStr != "" {
+		toT, _ = time.Parse("2006-01-02", toStr)
+		toT = toT.AddDate(0, 0, 1)
+	}
+	if !fromT.IsZero() || !toT.IsZero() {
+		filtered := make([]Pull, 0, len(pulls))
+		for _, p := range pulls {
+			t := p.MergedAt
+			if t == nil {
+				continue
+			}
+			if !fromT.IsZero() && t.Before(fromT) {
+				continue
+			}
+			if !toT.IsZero() && !t.Before(toT) {
+				continue
+			}
+			filtered = append(filtered, p)
+		}
+		pulls = filtered
+	}
+
+	contribs := Contributors(pulls)
+
+	// Text search by login (case-insensitive substring).
+	if q != "" {
+		qlower := q
+		// case-insensitive: compare lowercased
+		filtered := make([]Contributor, 0)
+		for _, c := range contribs {
+			if len(q) > len(c.Login) {
+				// still check lower
+			}
+			if containsFold(c.Login, qlower) {
+				filtered = append(filtered, c)
+			}
+		}
+		contribs = filtered
+	}
+
+	pg := paginate(len(contribs), page, perPage)
+	rows := contribs[pg.From:pg.To]
 	writeJSON(w, struct {
-		Rows []Contributor `json:"rows"`
-	}{Contributors(s.store.Snapshot().Pulls)})
+		Rows        []Contributor `json:"rows"`
+		Pager       pager        `json:"pager"`
+		RepoOptions []RepoInfo   `json:"repoOptions"`
+	}{rows, pg, repoOptionsWithPulls(snap)})
+}
+
+// containsFold reports whether s contains substr case-insensitively.
+func containsFold(s, substr string) bool {
+	// small helper without importing strings for fold
+	// Use simple lowercasing — logins are ASCII.
+	if len(substr) == 0 {
+		return true
+	}
+	if len(substr) > len(s) {
+		return false
+	}
+	// lower both
+	ls := toLowerASCII(s)
+	lsub := toLowerASCII(substr)
+	return containsASCII(ls, lsub)
+}
+
+func toLowerASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
+}
+
+func containsASCII(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // handleAPIContributor serves the drill-down view for one author.
@@ -380,7 +486,11 @@ func (s *Server) handleAPIContributor(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing login", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, ContributorDetailOf(s.store.Snapshot().Pulls, login))
+	gran := Granularity(r.URL.Query().Get("gran"))
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	writeJSON(w, ContributorDetailOfGran(s.store.Snapshot().Pulls, login, gran))
 }
 
 func (s *Server) handleAPIPulls(w http.ResponseWriter, r *http.Request) {
