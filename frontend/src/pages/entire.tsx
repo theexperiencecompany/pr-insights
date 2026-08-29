@@ -1,3 +1,6 @@
+// VISION v-entire — see docs/vision-entire.md
+// Planned: scatter checkpoints→PRs bubble, unified timeline brush (syncId+Brush+?from=&to=), streak guard, token coach.
+// This header is vision-pointer only; implementation lands in next phases (entire.go -> api.go -> api.ts -> entire.tsx).
 import { useMemo, useState } from 'react'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 import { Activity, Flame, RefreshCw, Zap } from 'lucide-react'
