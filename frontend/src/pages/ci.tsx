@@ -525,7 +525,7 @@ export default function CIPage() {
                 <Card className={hasNeeds ? "mt-4  border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/10" : "mt-4 "} role="region" aria-label="Workflows needing attention">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <CardTitle className="text-base font-semibold flex items-center gap-2">
                         <span className={hasNeeds ? "size-2.5 rounded-full bg-amber-500" : "size-2.5 rounded-full bg-green-500"} aria-hidden />
                         Needs attention
                         {hasNeeds ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">{needs!.length}</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-200">0</Badge>}
@@ -580,7 +580,7 @@ export default function CIPage() {
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium" title={wf.workflow}>{wf.workflow}</div>
+                            <div className="truncate text-base font-semibold" title={wf.workflow}>{wf.workflow}</div>
                             <div className="text-[11px] text-muted-foreground truncate">{wf.repo} · {wf.runs} runs · {wf.successRate.toFixed(0)}% success</div>
                           </div>
                           <HostingPill hosting={wf.hosting} />
