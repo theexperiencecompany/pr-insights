@@ -109,24 +109,48 @@ function PieTip({ active, payload }: any) {
 function TrendTip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null
   const rows = payload as any[]
-  const totalEntry = rows.find((r) => r.dataKey === 'home' || r.dataKey === 'github')
-  const total = totalEntry?.payload as CIRunnerBucket | undefined
+  // payload entries are trendData rows: github/home/unknown percentages plus _raw CIRunnerBucket
+  const raw: CIRunnerBucket | undefined = (rows[0]?.payload as any)?._raw ?? (rows[0]?.payload as CIRunnerBucket | undefined)
+  // raw contains counts and minutes per hosting with correct sums (home+github+unknown == total)
   return (
     <TipShell label={label}>
       {rows.map((entry) => {
         const key = String(entry.dataKey)
-        const val = Number(entry.value ?? 0)
+        const pct = Number(entry.value ?? 0)
         const col = getPayloadColor(entry) ?? (key === 'home' ? 'var(--chart-2)' : key === 'github' ? 'var(--chart-3)' : 'var(--chart-5)')
-        const countVal = total ? (key === 'home' ? total.home : key === 'github' ? total.github : total.unknown) : 0
-        return <TipRow key={key} color={col} label={key} value={`${val.toFixed(0)}% (${comma(countVal)} runs)`} />
+        let count = 0
+        let minutes = 0
+        let hostPct = pct
+        if (raw) {
+          if (key === 'home') {
+            count = raw.home
+            minutes = (raw as any).homeMinutes ?? 0
+            hostPct = (raw as any).homePct ?? pct
+          } else if (key === 'github') {
+            count = raw.github
+            minutes = (raw as any).githubMinutes ?? 0
+            hostPct = (raw as any).githubPct ?? pct
+          } else if (key === 'unknown') {
+            count = raw.unknown
+            minutes = (raw as any).unknownMinutes ?? 0
+            hostPct = (raw as any).unknownPct ?? pct
+          }
+        }
+        return <TipRow key={key} color={col} label={key} value={`${hostPct.toFixed(1)}% · ${comma(count)} runs · ${comma(minutes)} min`} />
       })}
-      {total ? (
-        <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
-          <span className="text-muted-foreground">Total</span>
-          <span className="font-mono font-medium tabular-nums">{comma(total.total)} runs · {comma(total.totalMinutes)} min</span>
-        </div>
+      {raw ? (
+        <>
+          <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
+            <span className="text-muted-foreground">Total</span>
+            <span className="font-mono font-medium tabular-nums">{comma(raw.total)} runs · {comma(raw.totalMinutes)} min</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 text-[11px] text-muted-foreground">
+            <span>home {raw.homePct.toFixed(1)}% · github {raw.githubPct.toFixed(1)}%{raw.unknown > 0 ? ` · unknown ${raw.unknownPct.toFixed(1)}%` : ''}</span>
+            <span>{raw.home} + {raw.github}{raw.unknown>0 ? ` + ${raw.unknown}` : ''} = {raw.total}</span>
+          </div>
+        </>
       ) : null}
-      <div className="text-[11px] text-muted-foreground">github bottom · home top · 100% stacked</div>
+      <div className="text-[11px] text-muted-foreground">github bottom · home middle · unknown top · 100% stacked</div>
     </TipShell>
   )
 }
@@ -210,7 +234,7 @@ export default function CIPage() {
       { name: 'home', value: s.homeRuns, runs: s.homeRuns, minutes: s.homeMinutes, pct: s.homePctRuns, fill: 'var(--chart-2)' },
       { name: 'github', value: s.githubRuns, runs: s.githubRuns, minutes: s.githubMinutes, pct: s.githubPctRuns, fill: 'var(--chart-3)' },
     ]
-    if (s.unknownRuns > 0) rows.push({ name: 'unknown', value: s.unknownRuns, runs: s.unknownRuns, minutes: 0, pct: s.unknownRuns / s.totalRuns * 100, fill: 'var(--chart-5)' })
+    if (s.unknownRuns > 0) rows.push({ name: 'unknown', value: s.unknownRuns, runs: s.unknownRuns, minutes: (s as any).unknownMinutes ?? 0, pct: (s as any).unknownPctRuns ?? s.unknownRuns / s.totalRuns * 100, fill: 'var(--chart-5)' })
     return rows.filter(r => r.value > 0)
   }, [data])
 
@@ -437,11 +461,9 @@ export default function CIPage() {
                         <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} />
                         <YAxis tickLine={false} axisLine={false} width={30} tickFormatter={(v: number) => `${v}%`} domain={[0, 100]} />
                         <ChartTooltip content={<TrendTip />} />
-                        <Area type="monotone" dataKey="github" stackId="1" stroke="var(--color-github)" fill="var(--color-github)" fillOpacity={0.9} />
-                        <Area type="monotone" dataKey="home" stackId="1" stroke="var(--color-home)" fill="var(--color-home)" fillOpacity={0.85} />
-                        {data.trend.some(b => b.unknown > 0) && (
-                          <Area type="monotone" dataKey="unknown" stackId="1" stroke="var(--color-unknown)" fill="var(--color-unknown)" fillOpacity={0.6} />
-                        )}
+                        <Area type="monotone" dataKey="github" stackId="1" stroke="var(--chart-3)" fill="var(--chart-3)" fillOpacity={0.9} />
+                        <Area type="monotone" dataKey="home" stackId="1" stroke="var(--chart-2)" fill="var(--chart-2)" fillOpacity={0.85} />
+                        <Area type="monotone" dataKey="unknown" stackId="1" stroke="var(--chart-5)" fill="var(--chart-5)" fillOpacity={0.6} />
                       </AreaChart>
                     </ChartContainer>
                   )}

@@ -247,8 +247,8 @@ export interface CostPerMerge { totalMinutes: number; merged: number; perMergeMi
 export type RunnerGroup = 'home' | 'github' | 'unknown'
 export interface RunnerSplit {
   homeRuns: number; githubRuns: number; unknownRuns: number; totalRuns: number
-  homeMinutes: number; githubMinutes: number; totalMinutes: number
-  homePctRuns: number; homePctMinutes: number; githubPctRuns: number
+  homeMinutes: number; githubMinutes: number; unknownMinutes: number; totalMinutes: number
+  homePctRuns: number; homePctMinutes: number; githubPctRuns: number; githubPctMinutes: number; unknownPctRuns: number; unknownPctMinutes: number
 }
 export interface WorkflowHybrid {
   repo: string; workflow: string; key: string
@@ -273,7 +273,7 @@ export interface CIRunnerBucket {
   key: string; label: string
   home: number; github: number; unknown: number; total: number
   homePct: number; githubPct: number; unknownPct: number
-  homeMinutes: number; githubMinutes: number; totalMinutes: number
+  homeMinutes: number; githubMinutes: number; unknownMinutes: number; totalMinutes: number
 }
 export interface HybridData {
   period: string; gran: string; repo: string

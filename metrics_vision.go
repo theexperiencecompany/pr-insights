@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -1169,16 +1170,20 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 }
 
 type RunnerSplit struct {
-	HomeRuns      int     `json:"homeRuns"`
-	GithubRuns    int     `json:"githubRuns"`
-	UnknownRuns   int     `json:"unknownRuns"`
-	TotalRuns     int     `json:"totalRuns"`
-	HomeMinutes   int     `json:"homeMinutes"`
-	GithubMinutes int     `json:"githubMinutes"`
-	TotalMinutes  int     `json:"totalMinutes"`
-	HomePctRuns   float64 `json:"homePctRuns"`
-	HomePctMin    float64 `json:"homePctMinutes"`
-	GithubPctRuns float64 `json:"githubPctRuns"`
+	HomeRuns       int     `json:"homeRuns"`
+	GithubRuns     int     `json:"githubRuns"`
+	UnknownRuns    int     `json:"unknownRuns"`
+	TotalRuns      int     `json:"totalRuns"`
+	HomeMinutes    int     `json:"homeMinutes"`
+	GithubMinutes  int     `json:"githubMinutes"`
+	UnknownMinutes int     `json:"unknownMinutes"`
+	TotalMinutes   int     `json:"totalMinutes"`
+	HomePctRuns    float64 `json:"homePctRuns"`
+	HomePctMin     float64 `json:"homePctMinutes"`
+	GithubPctRuns  float64 `json:"githubPctRuns"`
+	GithubPctMin   float64 `json:"githubPctMinutes"`
+	UnknownPctRuns float64 `json:"unknownPctRuns"`
+	UnknownPctMin  float64 `json:"unknownPctMinutes"`
 }
 
 func RunnerSplitOf(runs []Run, repo string, since time.Time) RunnerSplit {
@@ -1187,9 +1192,9 @@ func RunnerSplitOf(runs []Run, repo string, since time.Time) RunnerSplit {
 		if repo != "" && r.Repo != repo {
 			continue
 		}
-		t := r.CreatedAt
+		t := r.RunStartedAt
 		if t.IsZero() {
-			t = r.RunStartedAt
+			t = r.CreatedAt
 		}
 		if !since.IsZero() && t.Before(since) {
 			continue
@@ -1208,16 +1213,27 @@ func RunnerSplitOf(runs []Run, repo string, since time.Time) RunnerSplit {
 			s.GithubMinutes += mins
 		default:
 			s.UnknownRuns++
+			s.UnknownMinutes += mins
 		}
 	}
 	s.TotalRuns = s.HomeRuns + s.GithubRuns + s.UnknownRuns
-	s.TotalMinutes = s.HomeMinutes + s.GithubMinutes
+	s.TotalMinutes = s.HomeMinutes + s.GithubMinutes + s.UnknownMinutes
 	if s.TotalRuns > 0 {
 		s.HomePctRuns = float64(s.HomeRuns) / float64(s.TotalRuns) * 100
 		s.GithubPctRuns = float64(s.GithubRuns) / float64(s.TotalRuns) * 100
+		s.UnknownPctRuns = float64(s.UnknownRuns) / float64(s.TotalRuns) * 100
+		if float64(s.UnknownRuns)/float64(s.TotalRuns)*100 > 10 {
+			slog.Warn("RunnerSplit unknown >10%", "unknown", s.UnknownRuns, "total", s.TotalRuns, "pct", s.UnknownPctRuns, "repo", repo)
+		}
+		// invariant: hostingCounts sum == totalRuns and homePct = home/total*100
+		if s.HomeRuns+s.GithubRuns+s.UnknownRuns != s.TotalRuns {
+			slog.Warn("RunnerSplit sum mismatch", "home", s.HomeRuns, "github", s.GithubRuns, "unknown", s.UnknownRuns, "total", s.TotalRuns)
+		}
 	}
 	if s.TotalMinutes > 0 {
 		s.HomePctMin = float64(s.HomeMinutes) / float64(s.TotalMinutes) * 100
+		s.GithubPctMin = float64(s.GithubMinutes) / float64(s.TotalMinutes) * 100
+		s.UnknownPctMin = float64(s.UnknownMinutes) / float64(s.TotalMinutes) * 100
 	}
 	return s
 }
@@ -1267,18 +1283,19 @@ func ReleaseStatsOf(pulls []Pull, repo string, since time.Time) ReleaseStats {
 }
 
 type CIRunnerBucket struct {
-	Key           string  `json:"key"`
-	Label         string  `json:"label"`
-	Home          int     `json:"home"`
-	Github        int     `json:"github"`
-	Unknown       int     `json:"unknown"`
-	Total         int     `json:"total"`
-	HomePct       float64 `json:"homePct"`
-	GithubPct     float64 `json:"githubPct"`
-	UnknownPct    float64 `json:"unknownPct"`
-	HomeMinutes   int     `json:"homeMinutes"`
-	GithubMinutes int     `json:"githubMinutes"`
-	TotalMinutes  int     `json:"totalMinutes"`
+	Key            string  `json:"key"`
+	Label          string  `json:"label"`
+	Home           int     `json:"home"`
+	Github         int     `json:"github"`
+	Unknown        int     `json:"unknown"`
+	Total          int     `json:"total"`
+	HomePct        float64 `json:"homePct"`
+	GithubPct      float64 `json:"githubPct"`
+	UnknownPct     float64 `json:"unknownPct"`
+	HomeMinutes    int     `json:"homeMinutes"`
+	GithubMinutes  int     `json:"githubMinutes"`
+	UnknownMinutes int     `json:"unknownMinutes"`
+	TotalMinutes   int     `json:"totalMinutes"`
 }
 
 func HybridSeries(runs []Run, repo string, gran Granularity, since time.Time) []CIRunnerBucket {
@@ -1310,21 +1327,60 @@ func HybridSeries(runs []Run, repo string, gran Granularity, since time.Time) []
 			byKey[key] = b
 		}
 		b.Total++
-		b.TotalMinutes += r.DurationSec / 60
+		mins := r.DurationSec / 60
+		b.TotalMinutes += mins
 		switch RunnerGroupOf(r) {
 		case RunnerHome:
 			b.Home++
-			b.HomeMinutes += r.DurationSec / 60
+			b.HomeMinutes += mins
 		case RunnerGithub:
 			b.Github++
-			b.GithubMinutes += r.DurationSec / 60
+			b.GithubMinutes += mins
 		default:
 			b.Unknown++
+			b.UnknownMinutes += mins
+		}
+		// invariant: hostingCounts per bucket sum == totalRuns per bucket
+		if b.Home+b.Github+b.Unknown != b.Total {
+			slog.Warn("HybridSeries hosting sum mismatch", "key", key, "home", b.Home, "github", b.Github, "unknown", b.Unknown, "total", b.Total)
 		}
 	}
 	var keys []string
 	if !since.IsZero() {
 		keys = continuousKeys(since, time.Now().UTC(), gran)
+		// Ensure trend length matches period bucket count for month granularity:
+		// continuousKeys inclusive yields N+1 for N months (e.g., 3m -> 4). Trim to N.
+		// 3m->3 buckets, 6m->6, 12m->12. Handle AddDate day overflow (e.g., Aug29 -6m = Mar01 not Feb28 -> diff 5 but expected 6).
+		if gran == GranMonth && len(keys) > 1 {
+			sinceMonth := time.Date(since.UTC().Year(), since.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+			nowMonth := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
+			// Recover N (3/6/12) by finding i where now.AddDate(0,-i,0) month == sinceMonth
+			// Use largest i to handle day overflow (e.g., Aug29 -6m = Mar01 and Aug29 -5m = Mar29 both map to Mar)
+			expected := 0
+			now := time.Now().UTC()
+			for i := 1; i <= 24; i++ {
+				cand := now.AddDate(0, -i, 0)
+				candMonth := time.Date(cand.Year(), cand.Month(), 1, 0, 0, 0, 0, time.UTC)
+				if candMonth.Equal(sinceMonth) {
+					expected = i
+					// do not break, keep searching for larger i that also matches (overflow duplicates)
+				}
+			}
+			if expected == 0 {
+				diffMonths := (nowMonth.Year()-sinceMonth.Year())*12 + int(nowMonth.Month()-sinceMonth.Month())
+				expected = diffMonths
+			}
+			if expected <= 0 {
+				expected = 1
+			}
+			if len(keys) == expected+1 {
+				keys = keys[1:]
+			} else if len(keys) > expected {
+				keys = keys[len(keys)-expected:]
+			} else if len(keys) < expected {
+				// pad or keep as is; exhaustive fallback keeps keys
+			}
+		}
 	} else {
 		if len(byKey) == 0 {
 			return nil
@@ -1335,6 +1391,7 @@ func HybridSeries(runs []Run, repo string, gran Granularity, since time.Time) []
 		sort.Strings(keys)
 	}
 	out := make([]CIRunnerBucket, 0, len(keys))
+	var totalUnknown, totalRuns int
 	for _, k := range keys {
 		b := byKey[k]
 		if b == nil {
@@ -1347,12 +1404,21 @@ func HybridSeries(runs []Run, repo string, gran Granularity, since time.Time) []
 			_, label := bucketKey(t, gran)
 			b = &CIRunnerBucket{Key: k, Label: label}
 		}
+		if b.Home+b.Github+b.Unknown != b.Total {
+			slog.Warn("HybridSeries bucket sum mismatch after fill", "key", k, "home", b.Home, "github", b.Github, "unknown", b.Unknown, "total", b.Total)
+		}
 		if b.Total > 0 {
 			b.HomePct = float64(b.Home) / float64(b.Total) * 100
 			b.GithubPct = float64(b.Github) / float64(b.Total) * 100
 			b.UnknownPct = float64(b.Unknown) / float64(b.Total) * 100
+			// verify homePct = home/total*100 correctness (already)
 		}
+		totalUnknown += b.Unknown
+		totalRuns += b.Total
 		out = append(out, *b)
+	}
+	if totalRuns > 0 && float64(totalUnknown)/float64(totalRuns)*100 > 10 {
+		slog.Warn("HybridSeries unknown >10%", "unknown", totalUnknown, "total", totalRuns, "pct", float64(totalUnknown)/float64(totalRuns)*100, "repo", repo, "gran", string(gran))
 	}
 	return out
 }
@@ -1363,9 +1429,9 @@ func OverallHybridStats(runs []Run, repo string, since time.Time) (p50, p90, avg
 		if repo != "" && r.Repo != repo {
 			continue
 		}
-		t := r.CreatedAt
+		t := r.RunStartedAt
 		if t.IsZero() {
-			t = r.RunStartedAt
+			t = r.CreatedAt
 		}
 		if !since.IsZero() && t.Before(since) {
 			continue
