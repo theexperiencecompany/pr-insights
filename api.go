@@ -44,6 +44,7 @@ type apiOverview struct {
 	ShipDist        ShipDistribution `json:"shipDist"`
 	Bus             BusFactor        `json:"bus"`
 	Heatmap         []DayCount       `json:"heatmap"`
+	Semantic        SemanticOverview `json:"semantic"`
 }
 
 type apiInsights struct {
@@ -123,6 +124,10 @@ func computeOverview(snap Data, largestN int, gran Granularity) apiOverview {
 		ShipDist:        ShipDistributionOf(snap.Pulls),
 		Bus:             BusFactorOf(contribs, merged),
 		Heatmap:         Heatmap(snap.Pulls, "", 365),
+		Semantic: SemanticOverview{
+			ByType:   SemanticBreakdown(snap.Pulls),
+			Timeline: SemanticTimeline(snap.Pulls, gran),
+		},
 	}
 }
 

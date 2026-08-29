@@ -178,6 +178,10 @@ export interface OverviewData {
   shipDist: { zone: string; weekday: number[]; weekdayLabels: string[]; hour: number[] }
   bus: { top3Share: number; top: Contributor[] }
   heatmap: { date: string; merged: number }[]
+  semantic: {
+    byType: { type: string; count: number; percent: number }[]
+    timeline: { key: string; label: string; total: number; counts: Record<string, number> }[]
+  }
 }
 
 export interface LeaderboardData {

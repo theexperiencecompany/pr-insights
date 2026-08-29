@@ -8,6 +8,9 @@ import {
   BarChart,
   Brush,
   CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
   ReferenceLine,
   XAxis,
   YAxis,
@@ -60,6 +63,28 @@ const weekdayChartConfig = {
 const hourChartConfig = {
   hour: { label: 'Merged', color: 'var(--chart-1)' },
 } satisfies ChartConfig
+
+// Semantic PR types — conventional commits palette (Primer + chart tokens)
+const SEM_TYPES = ["feat","fix","chore","docs","style","refactor","perf","test","build","ci","revert","other"] as const
+const SEM_COLORS: Record<string, string> = {
+  feat: "var(--chart-1)",
+  fix: "var(--chart-2)",
+  chore: "#0969da",
+  docs: "var(--chart-3)",
+  style: "var(--chart-5)",
+  refactor: "#cf222e",
+  perf: "#8250df",
+  test: "#bf8700",
+  build: "#6639ba",
+  ci: "#1f883d",
+  revert: "#82071e",
+  other: "var(--muted-foreground)",
+}
+const semanticPieConfig = SEM_TYPES.reduce((acc, t) => {
+  acc[t as string] = { label: t, color: SEM_COLORS[t] ?? "var(--chart-1)" }
+  return acc
+}, {} as ChartConfig)
+const semanticAreaConfig = { ...semanticPieConfig } satisfies ChartConfig
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <div className="text-sm font-semibold">{children}</div>
@@ -286,6 +311,113 @@ function BusCard({ data }: { data: OverviewData }) {
           {bus.top.length === 0 ? (
             <p className="text-xs text-muted-foreground">No contributor data.</p>
           ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'month' }) {
+  const byType = data.semantic?.byType ?? []
+  const timeline = data.semantic?.timeline ?? []
+  const total = data.stats.total
+  const sum = byType.reduce((s, b) => s + b.count, 0)
+  // Transform timeline for 100% stacked area: flat rows with each type count
+  const areaData = useMemo(() => {
+    return timeline.map((b) => {
+      const row: Record<string, string | number> = { label: b.label, key: b.key, total: b.total }
+      for (const t of SEM_TYPES) {
+        row[t] = b.counts?.[t] ?? 0
+      }
+      return row
+    })
+  }, [timeline])
+  const hasData = byType.length > 0
+  const pieData = useMemo(() => byType.map((s) => ({ name: s.type, value: s.count, percent: s.percent })), [byType])
+  if (!hasData) return null
+  return (
+    <Card className="rounded-[6px]">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
+        <div>
+          <SectionTitle>Semantic PR types</SectionTitle>
+          <span className="text-xs text-muted-foreground">
+            Conventional commits · regex <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.*\))?!?:</code>
+            {' · '}
+            {comma(sum)} / {comma(total)} PRs · {total === sum ? '✓ counts match' : 'mismatch'}
+          </span>
+        </div>
+        <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground">{gran === 'week' ? 'by week' : 'by month'}</span>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* Pie */}
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-2 text-center">Distribution (pie)</div>
+            <ChartContainer config={semanticPieConfig} className="mx-auto aspect-square max-h-[260px]">
+              <PieChart>
+                <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={52} outerRadius={88} paddingAngle={1}>
+                  {pieData.map((entry) => (
+                    <Cell key={entry.name} fill={SEM_COLORS[entry.name] ?? "var(--chart-1)"} stroke="var(--background)" strokeWidth={1} />
+                  ))}
+                </Pie>
+                <ChartLegend content={<ChartLegendContent nameKey="name" />} />
+              </PieChart>
+            </ChartContainer>
+            <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+              {byType.map((s) => (
+                <span key={s.type} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                  <span className="inline-block size-2 rounded-full" style={{ background: SEM_COLORS[s.type] ?? "var(--chart-1)" }} />
+                  {s.type} {comma(s.count)} ({s.percent.toFixed(1)}%)
+                </span>
+              ))}
+            </div>
+          </div>
+          {/* Stacked 100% area */}
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-2 text-center">Evolution (stacked 100% area)</div>
+            <ChartContainer config={semanticAreaConfig} className="h-[260px] w-full">
+              <AreaChart data={areaData} stackOffset="expand" margin={{ left: 12, right: 12, top: 4 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} interval="preserveStartEnd" />
+                <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
+                <ChartTooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null
+                    const row = payload[0]?.payload as Record<string, number> | undefined
+                    const t = row?.total as number ?? 0
+                    return (
+                      <div className="grid min-w-40 gap-1.5 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-xs shadow-xl">
+                        <div className="font-medium">{String(label)} · {comma(t)} PRs</div>
+                        {SEM_TYPES.filter((k) => (row?.[k] as number) > 0)
+                          .sort((a, b) => (row?.[b] as number) - (row?.[a] as number))
+                          .map((k) => {
+                            const v = (row?.[k] as number) ?? 0
+                            const pct = t > 0 ? (v / t) * 100 : 0
+                            return (
+                              <div key={k} className="flex items-center justify-between gap-4">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="size-2 rounded-[2px]" style={{ background: SEM_COLORS[k] ?? "var(--chart-1)" }} />
+                                  <span className="text-muted-foreground">{k}</span>
+                                </span>
+                                <span className="font-mono font-medium tabular-nums">
+                                  {comma(v)} · {pct.toFixed(0)}%
+                                </span>
+                              </div>
+                            )
+                          })}
+                      </div>
+                    )
+                  }}
+                />
+                {SEM_TYPES.filter((t) => byType.some((b) => b.type === t)).map((t) => (
+                  <Area key={t} type="monotone" dataKey={t} stackId="1" stroke={SEM_COLORS[t] ?? "var(--chart-1)"} fill={SEM_COLORS[t] ?? "var(--chart-1)"} fillOpacity={0.85} strokeWidth={1} />
+                ))}
+                <ChartLegend content={<ChartLegendContent />} />
+              </AreaChart>
+            </ChartContainer>
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">100% stacked — share of PR types per {gran} (CreatedAt). Zero-filled weeks show 0%.</p>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -698,6 +830,8 @@ function OverviewContent({
       </div>
 
       <WhenWeShip data={data} />
+
+      <SemanticSection data={data} gran={gran} />
 
       {isWeek ? (
         <p className="text-[11px] text-muted-foreground">Weekly buckets start Monday · Jan 1 marked · brush to highlight heatmap weeks via ?from=&to={fromParam && toParam ? ` (${fromParam} → ${toParam})` : ''}</p>

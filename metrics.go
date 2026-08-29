@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -807,6 +808,142 @@ func WorkflowStats(runs []Run, repo string, since time.Time) []WorkflowStat {
 		}
 		return out[i].Repo+"|"+out[i].Workflow < out[j].Repo+"|"+out[j].Workflow
 	})
+	return out
+}
+
+
+
+// ---- semantic PR types ----
+
+// semanticRe matches conventional commit prefixes: feat, fix, chore, docs, style,
+// refactor, perf, test, build, ci, revert with optional scope and optional breaking !
+// Examples: "feat: add login", "fix(api)!: handle edge", "chore(deps): bump foo"
+var semanticRe = regexp.MustCompile(`^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?!?:\s`)
+
+// SemanticTypes is the canonical ordered list of semantic types plus "other".
+var SemanticTypes = []string{"feat", "fix", "chore", "docs", "style", "refactor", "perf", "test", "build", "ci", "revert", "other"}
+
+// PRTypeOf classifies a PR title into its conventional-commit type or "other".
+// It uses the regex ^(feat|fix|chore|...)(\([^)]+\))?!?:\s with case-insensitive matching
+// via lowercasing. Titles that do not match are classified as "other".
+func PRTypeOf(title string) string {
+	t := strings.TrimSpace(strings.ToLower(title))
+	m := semanticRe.FindStringSubmatch(t)
+	if m == nil {
+		return "other"
+	}
+	return m[1]
+}
+
+// SemanticSlice is one slice of the semantic pie: count and share of a type.
+type SemanticSlice struct {
+	Type    string  `json:"type"`
+	Count   int     `json:"count"`
+	Percent float64 `json:"percent"`
+}
+
+// SemanticBucket is one time bucket's semantic distribution for the stacked area.
+type SemanticBucket struct {
+	Key    string         `json:"key"`
+	Label  string         `json:"label"`
+	Total  int            `json:"total"`
+	Counts map[string]int `json:"counts"`
+}
+
+// SemanticOverview bundles the pie and the stacked timeline, exposed via OverviewData.
+type SemanticOverview struct {
+	ByType   []SemanticSlice  `json:"byType"`
+	Timeline []SemanticBucket `json:"timeline"`
+}
+
+// SemanticBreakdown counts all pulls per semantic type, sorted by count desc.
+// Percent is share of total pulls (0-100). Only types with count>0 are returned.
+func SemanticBreakdown(pulls []Pull) []SemanticSlice {
+	counts := make(map[string]int, len(SemanticTypes))
+	for i := range pulls {
+		t := PRTypeOf(pulls[i].Title)
+		counts[t]++
+	}
+	total := len(pulls)
+	out := make([]SemanticSlice, 0, len(SemanticTypes))
+	for _, typ := range SemanticTypes {
+		c := counts[typ]
+		if c == 0 {
+			continue
+		}
+		pct := 0.0
+		if total > 0 {
+			pct = float64(c) / float64(total) * 100
+		}
+		out = append(out, SemanticSlice{Type: typ, Count: c, Percent: pct})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Type < out[j].Type
+	})
+	return out
+}
+
+// SemanticTimeline buckets pulls by CreatedAt into continuous weekly or monthly
+// buckets (zero-filled) and counts semantic types per bucket. The timeline
+// total across all buckets always equals len(pulls), which lets the stacked
+// 100% area represent evolution of type share over time.
+func SemanticTimeline(pulls []Pull, gran Granularity) []SemanticBucket {
+	if len(pulls) == 0 {
+		return nil
+	}
+	if gran != GranWeek {
+		gran = GranMonth
+	}
+	byKey := make(map[string]*SemanticBucket)
+	var minTime, maxTime time.Time
+	for i := range pulls {
+		p := &pulls[i]
+		key, label := bucketKey(p.CreatedAt, gran)
+		b := byKey[key]
+		if b == nil {
+			b = &SemanticBucket{Key: key, Label: label, Counts: make(map[string]int)}
+			byKey[key] = b
+		}
+		typ := PRTypeOf(p.Title)
+		b.Counts[typ]++
+		b.Total++
+		if minTime.IsZero() || p.CreatedAt.Before(minTime) {
+			minTime = p.CreatedAt
+		}
+		if maxTime.IsZero() || p.CreatedAt.After(maxTime) {
+			maxTime = p.CreatedAt
+		}
+	}
+	keys := continuousKeys(minTime, maxTime, gran)
+	if len(keys) == 0 {
+		// Fallback: sorted keys of observed buckets
+		keys = make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+	}
+	out := make([]SemanticBucket, 0, len(keys))
+	for _, k := range keys {
+		b := byKey[k]
+		if b == nil {
+			var t time.Time
+			if gran == GranWeek {
+				t, _ = time.Parse("2006-01-02", k)
+			} else {
+				t, _ = time.Parse("2006-01", k)
+			}
+			_, label := bucketKey(t, gran)
+			b = &SemanticBucket{Key: k, Label: label, Counts: make(map[string]int)}
+		}
+		// Ensure every type key exists in Counts for stable stacked rendering
+		// (Recharts expects missing series to be 0, but explicit 0 helps tooltip).
+		// We keep map sparse to save JSON size — frontend treats missing as 0.
+		out = append(out, *b)
+	}
 	return out
 }
 
