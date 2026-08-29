@@ -934,7 +934,7 @@ function OverviewContent({
                   fillOpacity={0.2}
                 />
                 {hasBrush ? (
-                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                  <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleBrushChange} />
                 ) : null}
               </AreaChart>
             </ChartContainer>
@@ -973,7 +973,7 @@ function OverviewContent({
                 <Bar dataKey="deletions" name="Deleted" stackId="lines" fill="var(--color-deletions)" hide={Boolean(hiddenLines.deletions)} radius={[2, 2, 0, 0]} />
                 <ChartLegend content={<ToggleLegend hiddenSeries={hiddenLines} onToggleSeries={toggleLines} />} />
                 {hasBrush ? (
-                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                  <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleBrushChange} />
                 ) : null}
               </BarChart>
             </ChartContainer>

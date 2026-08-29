@@ -1016,7 +1016,7 @@ export default function InsightsPage() {
                         />
                       )}
                       {data && data.ship.length > 6 ? (
-                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                        <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleShipBrushChange} />
                       ) : null}
                     </AreaChart>
                   </ChartContainer>
@@ -1078,7 +1078,7 @@ export default function InsightsPage() {
                         activeDot={{ r: 4 }}
                       />
                       {data && data.ship.length > 6 ? (
-                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                        <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleShipBrushChange} />
                       ) : null}
                     </AreaChart>
                   </ChartContainer>
@@ -1121,7 +1121,7 @@ export default function InsightsPage() {
                         activeDot={{ r: 4 }}
                       />
                       {data && data.ship.length > 6 ? (
-                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                        <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleShipBrushChange} />
                       ) : null}
                     </LineChart>
                   </ChartContainer>
@@ -1158,7 +1158,7 @@ export default function InsightsPage() {
                         activeDot={{ r: 4 }}
                       />
                       {data && data.ship.length > 6 ? (
-                        <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleShipBrushChange} />
+                        <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleShipBrushChange} />
                       ) : null}
                     </AreaChart>
                   </ChartContainer>

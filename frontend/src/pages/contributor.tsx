@@ -248,7 +248,7 @@ export default function ContributorPage() {
                   activeDot={{ r: 4 }}
                 />
                 {hasBrush ? (
-                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                  <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleBrushChange} />
                 ) : null}
               </AreaChart>
             </ChartContainer>
@@ -283,7 +283,7 @@ export default function ContributorPage() {
                   activeDot={{ r: 4 }}
                 />
                 {hasBrush ? (
-                  <Brush dataKey="label" height={20} stroke="var(--chart-1)" travellerWidth={8} onChange={handleBrushChange} />
+                  <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleBrushChange} />
                 ) : null}
               </LineChart>
             </ChartContainer>
