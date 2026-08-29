@@ -84,6 +84,19 @@
     --sidebar-accent-foreground: #1f2328;
     --sidebar-border: #d1d9e0;
     --sidebar-ring: #0969da;
+    /* Semantic PR types — Primer open palette, colorblind-safe distinct hues */
+    --semantic-feat: #0969da;
+    --semantic-fix: #cf222e;
+    --semantic-chore: #8250df;
+    --semantic-docs: #0a3069;
+    --semantic-style: #1a7f37;
+    --semantic-refactor: #bf8700;
+    --semantic-perf: #9a6700;
+    --semantic-test: #0550ae;
+    --semantic-build: #6639ba;
+    --semantic-ci: #6e7781;
+    --semantic-revert: #82071e;
+    --semantic-other: #656d76;
 }
 
 .dark {
@@ -120,6 +133,19 @@
     --sidebar-accent-foreground: #f0f6fc;
     --sidebar-border: #3d444d;
     --sidebar-ring: #1f6feb;
+    /* Semantic dark variants — lighter for contrast on #0d1117, preserve hue families */
+    --semantic-feat: #4493f8;
+    --semantic-fix: #f85149;
+    --semantic-chore: #ab7df8;
+    --semantic-docs: #79c0ff;
+    --semantic-style: #3fb950;
+    --semantic-refactor: #d29922;
+    --semantic-perf: #f0883e;
+    --semantic-test: #58a6ff;
+    --semantic-build: #d2a8ff;
+    --semantic-ci: #9198a1;
+    --semantic-revert: #ff7b72;
+    --semantic-other: #8c959f;
 }
 
 @layer base {

@@ -64,27 +64,37 @@ const hourChartConfig = {
   hour: { label: 'Merged', color: 'var(--chart-1)' },
 } satisfies ChartConfig
 
-// Semantic PR types — conventional commits palette (Primer + chart tokens)
+// Semantic PR types — Primer open palette, colorblind-safe distinct hues
+// Light: Primer open; Dark: lighter variants via CSS var --semantic-* for contrast on #0d1117
+// - feat #0969da blue, fix #cf222e red, chore #8250df purple, docs #0a3069 navy
+// - style #1a7f37 green, refactor #bf8700 yellow, perf #9a6700 orange, test #0550ae dark blue
+// - build #6639ba purple-dark (distinct from chore), ci #6e7781 gray, revert #82071e red-dark (distinct from fix), other #656d76 muted
+// Deuteranopia safe: red (#cf222e) not adjacent to green (#1a7f37) in stack — separated by purple/navy;
+// green (#1a7f37) not adjacent to yellow (#bf8700) — ci gray buffers in stack order; palette uses luminance + hue distance.
+// Heatmap collision avoided: heatmap greens are #9be9a8/#40c463/#30a14e — semantic greens are darker #1a7f37 / #3fb950 dark.
+// Contrast >3:1 vs white and vs #0d1117 via dark variants defined in index.css.
 const SEM_TYPES = ["feat","fix","chore","docs","style","refactor","perf","test","build","ci","revert","other"] as const
 const SEM_COLORS: Record<string, string> = {
-  feat: "var(--chart-1)",
-  fix: "var(--chart-2)",
-  chore: "#0969da",
-  docs: "var(--chart-3)",
-  style: "var(--chart-5)",
-  refactor: "#cf222e",
-  perf: "#8250df",
-  test: "#bf8700",
-  build: "#6639ba",
-  ci: "#1f883d",
-  revert: "#82071e",
-  other: "var(--muted-foreground)",
+  feat: "var(--semantic-feat)",
+  fix: "var(--semantic-fix)",
+  chore: "var(--semantic-chore)",
+  docs: "var(--semantic-docs)",
+  style: "var(--semantic-style)",
+  refactor: "var(--semantic-refactor)",
+  perf: "var(--semantic-perf)",
+  test: "var(--semantic-test)",
+  build: "var(--semantic-build)",
+  ci: "var(--semantic-ci)",
+  revert: "var(--semantic-revert)",
+  other: "var(--semantic-other)",
 }
 const semanticPieConfig = SEM_TYPES.reduce((acc, t) => {
-  acc[t as string] = { label: t, color: SEM_COLORS[t] ?? "var(--chart-1)" }
+  acc[t as string] = { label: t, color: SEM_COLORS[t] ?? "var(--semantic-feat)" }
   return acc
 }, {} as ChartConfig)
 const semanticAreaConfig = { ...semanticPieConfig } satisfies ChartConfig
+// Stack order for Area (deuteranopia safe): separates red↔green and green↔yellow with neutral buffers
+const SEM_STACK_ORDER = ["feat","fix","chore","docs","perf","test","style","ci","refactor","build","revert","other"] as const
 
 // --- Unified tooltip helpers (use TipShell+TipRow, color dot via p.color/p.stroke, dashed where needed) ---
 function MergedTip({ active, payload, label }: Partial<import('recharts').TooltipContentProps<number, string>>) {
@@ -171,7 +181,7 @@ function SemanticAreaTip({ active, payload, label }: Partial<import('recharts').
         .sort((a,b)=>Number(b.value)-Number(a.value))
         .map((entry) => {
           const k = String(entry.dataKey)
-          const col = getPayloadColor(entry) ?? (SEM_COLORS[k] ?? "var(--chart-1)")
+          const col = getPayloadColor(entry) ?? (SEM_COLORS[k] ?? "var(--semantic-feat)")
           const v = Number(entry.value ?? 0)
           const pct = t > 0 ? (v / t) * 100 : 0
           return <TipRow key={k} color={col as string} label={k} value={`${comma(v)} · ${pct.toFixed(0)}%`} />
@@ -548,7 +558,7 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
                 <ChartTooltip content={<SemanticPieTip />} />
                 <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={52} outerRadius={88} paddingAngle={1}>
                   {pieData.map((entry) => (
-                    <Cell key={entry.name} fill={SEM_COLORS[entry.name] ?? "var(--chart-1)"} stroke="var(--background)" strokeWidth={1} />
+                    <Cell key={entry.name} fill={SEM_COLORS[entry.name] ?? "var(--semantic-feat)"} stroke="var(--background)" strokeWidth={1} />
                   ))}
                 </Pie>
                 <ChartLegend content={<ChartLegendContent nameKey="name" />} />
@@ -557,7 +567,7 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
             <div className="mt-2 flex flex-wrap justify-center gap-1.5">
               {byType.map((s) => (
                 <span key={s.type} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                  <span className="inline-block size-2 rounded-full" style={{ background: SEM_COLORS[s.type] ?? "var(--chart-1)" }} />
+                  <span className="inline-block size-2 rounded-full" style={{ background: SEM_COLORS[s.type] ?? "var(--semantic-feat)" }} />
                   {s.type} {comma(s.count)} ({s.percent.toFixed(1)}%)
                 </span>
               ))}
@@ -567,13 +577,23 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
           <div>
             <div className="text-xs font-medium text-muted-foreground mb-2 text-center">Evolution (stacked 100% area)</div>
             <ChartContainer config={semanticAreaConfig} className="h-[260px] w-full">
-              <AreaChart data={areaData} stackOffset="expand" margin={{ left: 12, right: 12, top: 4 }}>
+              <AreaChart data={areaData} stackOffset="expand" margin={{ left: 12, right: 12, top: 4, bottom: 20 }}>
                 <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} interval="preserveStartEnd" />
+                <XAxis
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  tickMargin={8}
+                  interval={0}
+                  angle={-30}
+                  textAnchor="end"
+                  height={50}
+                  tick={{ fontSize: 11 }}
+                />
                 <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} domain={[0, 1]} />
                 <ChartTooltip content={<SemanticAreaTip />} />
-                {SEM_TYPES.filter((t) => byType.some((b) => b.type === t)).map((t) => (
-                  <Area key={t} type="monotone" dataKey={t} stackId="1" stroke={SEM_COLORS[t] ?? "var(--chart-1)"} fill={SEM_COLORS[t] ?? "var(--chart-1)"} fillOpacity={0.85} strokeWidth={1} />
+                {SEM_STACK_ORDER.filter((t) => byType.some((b) => b.type === t)).map((t) => (
+                  <Area key={t} type="monotone" dataKey={t} stackId="1" stroke={SEM_COLORS[t] ?? "var(--semantic-feat)"} fill={SEM_COLORS[t] ?? "var(--semantic-feat)"} fillOpacity={0.85} strokeWidth={1} />
                 ))}
                 <ChartLegend content={<ChartLegendContent />} />
               </AreaChart>
@@ -903,15 +923,18 @@ function OverviewContent({
             </CardHeader>
           <CardContent>
             <ChartContainer config={mergedChartConfig} className="h-[300px]">
-              <AreaChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
+              <AreaChart data={data.monthly} margin={{ left: 4, right: 4, top: 4, bottom: 20 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis
                   dataKey="label"
                   tickLine={false}
                   axisLine={false}
                   tickMargin={8}
-                  minTickGap={isWeek ? 24 : 16}
-                  interval="preserveStartEnd"
+                  interval={0}
+                  angle={isWeek ? -35 : -30}
+                  textAnchor="end"
+                  height={50}
+                  tick={{ fontSize: 11 }}
                   tickFormatter={weeklyTickFormatter}
                 />
                 <YAxis
@@ -919,6 +942,8 @@ function OverviewContent({
                   axisLine={false}
                   tickMargin={8}
                   width={40}
+                  domain={[0, 'auto']}
+                  allowDecimals={false}
                   tickFormatter={(v) => compact(Number(v))}
                 />
                 <ChartTooltip cursor={{ stroke: 'var(--border)' }} content={<MergedTip />} />
@@ -947,15 +972,18 @@ function OverviewContent({
           </CardHeader>
           <CardContent>
             <ChartContainer config={linesChartConfig} className="h-[300px]">
-              <BarChart data={data.monthly} margin={{ left: 4, right: 4, top: 4 }}>
+              <BarChart data={data.monthly} margin={{ left: 4, right: 4, top: 4, bottom: 20 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis
                   dataKey="label"
                   tickLine={false}
                   axisLine={false}
                   tickMargin={8}
-                  minTickGap={isWeek ? 24 : 16}
-                  interval="preserveStartEnd"
+                  interval={0}
+                  angle={isWeek ? -35 : -30}
+                  textAnchor="end"
+                  height={50}
+                  tick={{ fontSize: 11 }}
                   tickFormatter={weeklyTickFormatter}
                 />
                 <YAxis
@@ -963,6 +991,8 @@ function OverviewContent({
                   axisLine={false}
                   tickMargin={8}
                   width={40}
+                  domain={[0, 'auto']}
+                  allowDecimals={false}
                   tickFormatter={(v) => compact(Number(v))}
                 />
                 <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<LinesStackedTip hidden={hiddenLines} />} />

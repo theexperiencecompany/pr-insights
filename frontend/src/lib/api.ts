@@ -228,7 +228,7 @@ export interface PullsData {
   repoOptions: RepoInfo[]
 }
 
-export interface TShirtSegment { size: string; label: string; count: number; pct: number; color: string }
+export interface TShirtSegment { size: string; label: string; count: number; pct: number; color: string; avgDays: number; human: string }
 export interface LeadTimeBucket { key: string; label: string; count: number; p50: number; p75: number; p90: number; mean: number; min: number; max: number }
 export interface WIPPoint { date: string; wip: number }
 export interface LittleLaw { windowDays: number; avgWip: number; throughputPerDay: number; cycleMeanDays: number; predictedWip: number; errorPct: number; currentWip: number; points: WIPPoint[] }

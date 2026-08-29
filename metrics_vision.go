@@ -221,6 +221,24 @@ var tshirtLabels = map[TShirt]string{
 	TShirtXXL: "XXL · 1000+",
 }
 
+var tshirtHuman = map[TShirt]string{
+	TShirtXS:  "Tiny",
+	TShirtS:   "Small",
+	TShirtM:   "Medium",
+	TShirtL:   "Large",
+	TShirtXL:  "XL",
+	TShirtXXL: "Massive",
+}
+
+var tshirtDesc = map[TShirt]string{
+	TShirtXS:  "typo fix",
+	TShirtS:   "small fix",
+	TShirtM:   "feature",
+	TShirtL:   "large change",
+	TShirtXL:  "extra large",
+	TShirtXXL: "massive — split it",
+}
+
 func TShirtFor(p Pull) TShirt {
 	diff := p.Additions + p.Deletions
 	switch {
@@ -240,15 +258,18 @@ func TShirtFor(p Pull) TShirt {
 }
 
 type TShirtSegment struct {
-	Size  TShirt  `json:"size"`
-	Label string  `json:"label"`
-	Count int     `json:"count"`
-	Pct   float64 `json:"pct"`
-	Color string  `json:"color"`
+	Size    TShirt  `json:"size"`
+	Label   string  `json:"label"`
+	Count   int     `json:"count"`
+	Pct     float64 `json:"pct"`
+	Color   string  `json:"color"`
+	AvgDays float64 `json:"avgDays"`
+	Human   string  `json:"human"`
 }
 
 func TShirtDistribution(pulls []Pull) []TShirtSegment {
 	counts := map[TShirt]int{}
+	sums := map[TShirt]float64{}
 	total := 0
 	for _, p := range pulls {
 		if p.State != "MERGED" {
@@ -260,6 +281,13 @@ func TShirtDistribution(pulls []Pull) []TShirtSegment {
 		s := TShirtFor(p)
 		counts[s]++
 		total++
+		if p.MergedAt != nil {
+			d := p.MergedAt.Sub(p.CreatedAt).Hours() / 24
+			if d < 0 {
+				d = 0
+			}
+			sums[s] += d
+		}
 	}
 	order := []TShirt{TShirtXS, TShirtS, TShirtM, TShirtL, TShirtXL, TShirtXXL}
 	out := make([]TShirtSegment, 0, 6)
@@ -269,7 +297,11 @@ func TShirtDistribution(pulls []Pull) []TShirtSegment {
 		if total > 0 {
 			pct = float64(c) / float64(total) * 100
 		}
-		out = append(out, TShirtSegment{Size: s, Label: tshirtLabels[s], Count: c, Pct: pct, Color: tshirtColors[s]})
+		avg := 0.0
+		if c > 0 {
+			avg = sums[s] / float64(c)
+		}
+		out = append(out, TShirtSegment{Size: s, Label: tshirtLabels[s], Count: c, Pct: pct, Color: tshirtColors[s], AvgDays: avg, Human: tshirtHuman[s]})
 	}
 	return out
 }
@@ -467,15 +499,18 @@ func WIPSeries(pulls []Pull, repo string, from, to time.Time) []WIPPoint {
 	return points
 }
 
+// LittleLaw estimates WIP (count of open PRs) via Little's Law.
+// WIP = count of open PRs at a point in time. AvgWIP is the mean open PRs over WindowDays (e.g. 90 days).
+// PredictedWIP ≈ throughput (merges per day) × cycle time (days to merge). ErrorPct compares predicted vs avg.
 type LittleLaw struct {
-	WindowDays       int        `json:"windowDays"`
-	AvgWIP           float64    `json:"avgWip"`
-	ThroughputPerDay float64    `json:"throughputPerDay"`
-	CycleMeanDays    float64    `json:"cycleMeanDays"`
-	PredictedWIP     float64    `json:"predictedWip"`
-	ErrorPct         float64    `json:"errorPct"`
-	CurrentWIP       int        `json:"currentWip"`
-	Points           []WIPPoint `json:"points"`
+	WindowDays       int        `json:"windowDays"`       // window for the average, e.g. 90 days
+	AvgWIP           float64    `json:"avgWip"`           // avg PRs open in window (unit: PRs)
+	ThroughputPerDay float64    `json:"throughputPerDay"` // merges per day (PRs/day)
+	CycleMeanDays    float64    `json:"cycleMeanDays"`    // mean days from opened to merged
+	PredictedWIP     float64    `json:"predictedWip"`     // predicted PRs open (throughput × cycle)
+	ErrorPct         float64    `json:"errorPct"`         // |avg - predicted| / avg * 100
+	CurrentWIP       int        `json:"currentWip"`       // PRs open now
+	Points           []WIPPoint `json:"points"`           // daily WIP series (unit: PRs)
 }
 
 func LittleLawOf(pulls []Pull, repo string, windowDays int) LittleLaw {
@@ -606,9 +641,9 @@ func AbandonmentOf(pulls []Pull, repo string, since time.Time) Abandonment {
 		pctOpen = float64(open) / float64(total) * 100
 	}
 	segs := []DonutSegment{
-		{Label: "Merged", Count: merged, Pct: pctMerged, Color: "var(--chart-2)"},
-		{Label: "Abandoned", Count: closed, Pct: pctClosed, Color: "var(--chart-3)"},
-		{Label: "Open", Count: open, Pct: pctOpen, Color: "var(--chart-5)"},
+		{Label: "Merged (good)", Count: merged, Pct: pctMerged, Color: "var(--chart-2)"},
+		{Label: "Closed without merge (wasted)", Count: closed, Pct: pctClosed, Color: "var(--chart-3)"},
+		{Label: "Still open", Count: open, Pct: pctOpen, Color: "var(--chart-5)"},
 	}
 	return Abandonment{Total: total, Merged: merged, Closed: closed, Open: open, AbandonedRate: rate, Segments: segs, BySize: bySize}
 }

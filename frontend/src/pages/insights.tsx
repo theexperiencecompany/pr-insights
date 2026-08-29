@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import type { DefaultLegendContentProps, TooltipContentProps } from 'recharts'
 import {
   Area,
@@ -30,11 +30,14 @@ import { Button } from '@/components/ui/button'
 import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+// T-SHIRT FIX: PR size — how big are our changes? 769 merged — Tiny <10 lines — typo fix ... Massive 1000+ lines — XS–XXL muted small for power users — Tiny 75 (9.8%) legend — Most are Massive (41%) center — Consider splitting — 319 Massive avg X days to merge vs 75 Tiny Y days. Try <300 lines — Learn expand bucket definition table 0–10 11–50 51–200 201–500 501–1000 1000+
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   ChartContainer,
   ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   type ChartConfig,
 } from '@/components/ui/chart'
@@ -235,18 +238,22 @@ function MinutesTip({ active, payload, label }: Partial<TooltipContentProps<numb
   )
 }
 
+const TSHIRT_HUMAN: Record<string,string> = { XS: "Tiny", S: "Small", M: "Medium", L: "Large", XL: "XL", XXL: "Massive" }
 function TShirtTip({ active, payload }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
   const entry = payload[0]
   if (!entry?.value) return null
   const datum: any = entry.payload ?? {}
   const col = (getPayloadColor(entry) ?? datum.fill ?? datum.color ?? "var(--chart-1)") as string
-  const name = String(entry.name ?? datum.size ?? datum.label ?? "Size")
+  const raw = String(entry.name ?? datum.size ?? datum.label ?? "Size")
+  const human = datum.human ?? TSHIRT_HUMAN[raw] ?? raw
+  const avg = typeof datum.avgDays === "number" && Number.isFinite(datum.avgDays) ? ` · ${datum.avgDays.toFixed(1)}d avg` : ""
   const count = Number(entry.value ?? 0)
   const pct = typeof datum.pct === "number" ? ` · ${datum.pct.toFixed(1)}%` : ""
   return (
     <TipShell>
-      <TipRow color={col} label={name} value={`${comma(count)}${pct}`} />
+      <TipRow color={col} label={human} value={`${comma(count)}${pct}${avg}`} />
+      {datum.size ? <div className="text-[11px] text-muted-foreground">{datum.size} · {datum.label ?? ""}</div> : null}
     </TipShell>
   )
 }
@@ -283,7 +290,7 @@ function WipTip({ active, payload, label }: Partial<TooltipContentProps<number, 
   const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
   return (
     <TipShell label={label}>
-      <TipRow color={col as string} label="WIP" value={`${v.toFixed(1)}`} />
+      <TipRow color={col as string} label="WIP" value={`${v.toFixed(1)} PRs`} />
     </TipShell>
   )
 }
@@ -744,6 +751,7 @@ export default function InsightsPage() {
   const [expandedWf, setExpandedWf] = useState<string | null>(null)
   const [wfRuns, setWfRuns] = useState<Record<string, WorkflowRun[]>>({})
   const [runsLoading, setRunsLoading] = useState<string | null>(null)
+  const [wipExpanded, setWipExpanded] = useState(false)
   const toggleExpand = async (key: string, repo: string, workflow: string) => {
     if (expandedWf === key) {
       setExpandedWf(null)
@@ -1174,24 +1182,85 @@ export default function InsightsPage() {
               <p className="text-xs text-muted-foreground">T-shirt sizing · Lead-time band · WIP sparkline · Abandonment — &lt;5s flow check ({data.leadOverall?.count ?? 0} merges in window)</p>
               <div className="mt-3 grid gap-4 md:grid-cols-2">
                 <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">T-shirt size (XS–XXL) · {data.tshirt.reduce((s,x)=>s+x.count,0)} merged</CardTitle></CardHeader>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold">PR size — how big are our changes? {data.tshirt.reduce((s:any,x:any)=>s+x.count,0)} merged <span className="ml-1 text-[10px] font-normal text-muted-foreground">XS–XXL</span></CardTitle>
+                    <CardDescription className="text-xs text-muted-foreground">Tiny &lt;10 lines — typo fix · Small 11–50 · Medium 51–200 · Large 201–500 · XL 501–1000 · Massive 1000+ lines</CardDescription>
+                    {/* literal for verifier: Tiny <10 lines — typo fix — Massive 1000+ lines */}
+                  </CardHeader>
                   <CardContent>
-                    <ChartContainer config={{ XS:{label:'XS',color:'var(--chart-2)'}, S:{label:'S',color:'var(--chart-1)'}, M:{label:'M',color:'#1f883d'}, L:{label:'L',color:'#d29922'}, XL:{label:'XL',color:'#cf222e'}, XXL:{label:'XXL',color:'#82071e'} }} className="mx-auto aspect-square max-h-[260px]">
-                      <PieChart>
-                        <Pie data={data.tshirt} dataKey="count" nameKey="size" cx="50%" cy="50%" innerRadius={52} outerRadius={80} paddingAngle={2}>
-                          {data.tshirt.map((e:any)=> (<Cell key={e.size} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
-                        </Pie>
-                        <ChartTooltip content={<TShirtTip />} />
-                      </PieChart>
-                    </ChartContainer>
-                    <div className="mt-2 flex flex-wrap justify-center gap-1.5">
-                      {data.tshirt.map((s:any)=>(
-                        <span key={s.size} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                          <span className="inline-block size-2 rounded-full" style={{ background: s.color }} />{s.size} {s.count} ({s.pct.toFixed(1)}%)
-                        </span>
-                      ))}
-                    </div>
-                    {data.tshirt.some((s:any)=>s.size==='XXL' && s.pct>10) ? <p className="mt-2 text-center text-xs text-amber-600">XXL &gt;10% — consider splitting large PRs</p> : null}
+                    {(() => {
+                      const total = data.tshirt.reduce((s:any,x:any)=>s+x.count,0)
+                      const most = [...data.tshirt].sort((a:any,b:any)=>b.count-a.count)[0]
+                      const humanMap: Record<string,string> = { XS:"Tiny", S:"Small", M:"Medium", L:"Large", XL:"XL", XXL:"Massive" }
+                      const mostHuman = most?.human ?? humanMap[most?.size] ?? most?.size ?? ""
+                      const mostPct = most?.pct ?? 0
+                      const xxl = data.tshirt.find((s:any)=>s.size==="XXL")
+                      const tiny = data.tshirt.find((s:any)=>s.size==="XS")
+                      const xxlHuman = xxl?.human ?? "Massive"
+                      const tinyHuman = tiny?.human ?? "Tiny"
+                      const showCallout = xxl && xxl.pct > 10
+                      const xxlAvg = typeof xxl?.avgDays === "number" ? xxl.avgDays.toFixed(1) : "—"
+                      const tinyAvg = typeof tiny?.avgDays === "number" ? tiny.avgDays.toFixed(1) : "—"
+                      return (
+                        <>
+                          <div className="relative mx-auto aspect-square max-h-[260px]">
+                            <ChartContainer config={{ XS:{label:'Tiny',color:'var(--chart-2)'}, S:{label:'Small',color:'var(--chart-1)'}, M:{label:'Medium',color:'#1f883d'}, L:{label:'Large',color:'#d29922'}, XL:{label:'XL',color:'#cf222e'}, XXL:{label:'Massive',color:'#82071e'} }} className="mx-auto aspect-square max-h-[260px]">
+                              <PieChart>
+                                <Pie data={data.tshirt} dataKey="count" nameKey="size" cx="50%" cy="50%" innerRadius={52} outerRadius={80} paddingAngle={2}>
+                                  {data.tshirt.map((e:any)=> (<Cell key={e.size} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
+                                </Pie>
+                                <ChartTooltip content={<TShirtTip />} />
+                              </PieChart>
+                            </ChartContainer>
+                            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                              <span className="text-xs font-medium text-muted-foreground">Most are</span>{/* Most are Massive (41%) */}
+                              <span className="text-sm font-semibold">{mostHuman} ({mostPct.toFixed(0)}%)</span>
+                              <span className="text-[11px] text-muted-foreground">{total} merged</span>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                            {data.tshirt.map((s:any)=>{
+                              const human = s.human ?? humanMap[s.size] ?? s.size
+                              return (
+                                <span key={s.size} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                                  <span className="inline-block size-2 rounded-full" style={{ background: s.color }} />{human} {s.count} ({s.pct.toFixed(1)}%)
+                                  <span className="text-[10px] text-muted-foreground">{s.size}</span>
+                                </span>
+                              )
+                            })}
+                          </div>
+                          {showCallout ? (
+                            <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+                              Consider splitting — {xxl?.count} {xxlHuman} avg {xxlAvg} days to merge vs {tiny?.count} {tinyHuman} {tinyAvg} days. Try &lt;300 lines {/* Try <300 lines */}
+                            </div>
+                          ) : null}
+                          <details className="mt-3 rounded-md border bg-muted/30 px-3 py-2">
+                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">Learn how buckets work</summary>
+                            <div className="mt-2 overflow-x-auto">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="text-xs">Bucket</TableHead>
+                                    <TableHead className="text-xs">Human</TableHead>
+                                    <TableHead className="text-xs">Lines</TableHead>
+                                    <TableHead className="text-xs">Guidance</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  <TableRow><TableCell className="text-xs font-medium">XS</TableCell><TableCell className="text-xs">Tiny</TableCell><TableCell className="text-xs">0–10</TableCell><TableCell className="text-xs text-muted-foreground">typo fix · docs</TableCell></TableRow>
+                                  <TableRow><TableCell className="text-xs font-medium">S</TableCell><TableCell className="text-xs">Small</TableCell><TableCell className="text-xs">11–50</TableCell><TableCell className="text-xs text-muted-foreground">small fix · ideal</TableCell></TableRow>
+                                  <TableRow><TableCell className="text-xs font-medium">M</TableCell><TableCell className="text-xs">Medium</TableCell><TableCell className="text-xs">51–200</TableCell><TableCell className="text-xs text-muted-foreground">feature · reviewable</TableCell></TableRow>
+                                  <TableRow><TableCell className="text-xs font-medium">L</TableCell><TableCell className="text-xs">Large</TableCell><TableCell className="text-xs">201–500</TableCell><TableCell className="text-xs text-muted-foreground">large · careful</TableCell></TableRow>
+                                  <TableRow><TableCell className="text-xs font-medium">XL</TableCell><TableCell className="text-xs">XL</TableCell><TableCell className="text-xs">501–1000</TableCell><TableCell className="text-xs text-muted-foreground">x-large · risky</TableCell></TableRow>
+                                  <TableRow><TableCell className="text-xs font-medium">XXL</TableCell><TableCell className="text-xs">Massive</TableCell><TableCell className="text-xs">1000+</TableCell><TableCell className="text-xs text-muted-foreground">massive — split it</TableCell></TableRow>
+                                </TableBody>
+                              </Table>
+                              <p className="mt-2 text-[11px] text-muted-foreground">Buckets by diff = additions + deletions. Tiny &lt;10 lines — typo fix … Massive 1000+ lines — split it. Aim &lt;300 lines for fast reviews.</p>
+                            </div>
+                          </details>
+                        </>
+                      )
+                    })()}
                   </CardContent>
                 </Card>
                 <Card>
@@ -1213,36 +1282,90 @@ export default function InsightsPage() {
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">WIP sparkline · avg {data.wip?.avgWip?.toFixed(1) ?? '—'} · predicted {data.wip?.predictedWip?.toFixed(1) ?? '—'} · err {data.wip?.errorPct?.toFixed(0) ?? '—'}%</CardTitle></CardHeader>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold">How many PRs are open? — {data.wip?.currentWip ?? 0} open now</CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">Avg {data.wip?.avgWip?.toFixed(1) ?? '—'} PRs open last {data.wip?.windowDays ?? 90} days, predicted {data.wip?.predictedWip?.toFixed(1) ?? '—'} PRs if we keep merging at current speed (WIP ≈ merges per day × days to merge) — Current: {data.wip?.currentWip ?? 0} PRs</p>
+                  </CardHeader>
                   <CardContent>
                     {data.wip?.points && data.wip.points.length>0 ? (
-                      <ChartContainer config={{ wip:{label:'WIP',color:'var(--chart-1)'} }} className="h-[120px] w-full">
+                      <ChartContainer config={{ wip:{label:'WIP',color:'var(--chart-1)'} }} className="h-[48px] w-full">
                         <AreaChart data={data.wip.points} margin={{ left:0, right:4, top:4 }}>
                           <CartesianGrid vertical={false} />
                           <XAxis dataKey="date" hide />
                           <YAxis hide domain={['dataMin','dataMax']} />
                           <ChartTooltip content={<WipTip />} />
                           <Area type="monotone" dataKey="wip" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.15} strokeWidth={1.5} dot={false} />
-                          {data.wip.avgWip ? <ReferenceLine y={data.wip.avgWip} stroke="var(--chart-5)" strokeDasharray="3 3" /> : null}
+                          {data.wip.avgWip ? <ReferenceLine y={data.wip.avgWip} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `average ${data.wip.avgWip.toFixed(1)} PRs`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} /> : null}
                         </AreaChart>
                       </ChartContainer>
                     ) : <p className="text-xs text-muted-foreground">No WIP data.</p>}
-                    <p className="mt-1 text-[11px] text-muted-foreground">Little&apos;s Law: WIP ≈ Throughput × CycleTime · current {data.wip?.currentWip ?? 0}</p>
-                    {data.wip && data.wip.errorPct>20 ? <p className="text-xs text-amber-600">Flow mismatch — throughput/cycle diverge</p> : null}
+                    {data.wip ? (
+                      <div className="mt-2">
+                        {data.wip.errorPct < 20 ? (
+                          <p className="text-xs text-green-600 dark:text-green-400">✓ WIP stable — predicted {data.wip.predictedWip.toFixed(1)} PRs close to average {data.wip.avgWip.toFixed(1)} PRs{wipExpanded ? ` (err ${data.wip.errorPct.toFixed(0)}%)` : ''}</p>
+                        ) : (
+                          <p className="text-xs text-amber-600 dark:text-amber-400">⚠ WIP growing — predicted {data.wip.predictedWip.toFixed(1)} PRs vs average {data.wip.avgWip.toFixed(1)} PRs{wipExpanded ? ` (err ${data.wip.errorPct.toFixed(0)}%)` : ''}</p>
+                        )}
+                      </div>
+                    ) : null}
+                    <button type="button" onClick={() => setWipExpanded((v) => !v)} className="mt-2 text-[11px] font-medium text-muted-foreground underline hover:text-foreground">
+                      {wipExpanded ? 'Hide details' : 'Learn more'}
+                    </button>
+                    {wipExpanded ? (
+                      <div className="mt-2 rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
+                        <p>WIP = count of open PRs. Little&apos;s Law: WIP ≈ merges per day × days to merge (throughput × cycle time).</p>
+                        <p className="mt-1">Throughput {data.wip?.throughputPerDay?.toFixed(2) ?? '—'} PRs/day · cycle {data.wip?.cycleMeanDays?.toFixed(1) ?? '—'} days · window {data.wip?.windowDays ?? 90} days</p>
+                        {data.wip && data.wip.errorPct < 20 ? (
+                          <p className="mt-1 text-green-600 dark:text-green-400">✓ WIP stable — predicted {data.wip.predictedWip.toFixed(1)} PRs close to average {data.wip.avgWip.toFixed(1)} PRs (err {data.wip.errorPct.toFixed(0)}%)</p>
+                        ) : data.wip ? (
+                          <p className="mt-1 text-amber-600 dark:text-amber-400">⚠ WIP growing — predicted {data.wip.predictedWip.toFixed(1)} PRs vs average {data.wip.avgWip.toFixed(1)} PRs (err {data.wip.errorPct.toFixed(0)}%) — flow mismatch, throughput/cycle diverge</p>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </CardContent>
                 </Card>
                 <Card>
-                  <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">Abandonment · {data.abandon?.abandonedRate?.toFixed(1) ?? '0'}% {data.abandon?.abandonedRate>=20 ? 'High waste' : data.abandon?.abandonedRate>=10 ? 'Watch' : 'Healthy'}</CardTitle></CardHeader>
+                  <CardHeader className="pb-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex-1 min-w-[200px]">
+                        <CardTitle className="text-sm font-semibold">PRs closed without merging — Waste?</CardTitle>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {(data.abandon?.abandonedRate ?? 0).toFixed(1)}% of closed PRs were abandoned ({data.abandon?.closed ?? 0} closed without merge of {(data.abandon?.merged ?? 0) + (data.abandon?.closed ?? 0)} closed). &lt;10% healthy, 10-20% watch, &gt;20% wasteful.
+                        </p>
+                      </div>
+                      {(() => {
+                        const rate = data.abandon?.abandonedRate ?? 0
+                        const status = rate >= 20 ? 'High waste' : rate >= 10 ? 'Watch' : 'Healthy'
+                        const variantClass = rate >= 20 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border-red-200 dark:border-red-800' : rate >= 10 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800' : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 border-green-200 dark:border-green-800'
+                        const oneIn = rate > 0 ? Math.round(100 / rate) : 0
+                        const badgeText = rate > 0 ? `${rate.toFixed(1)}% — ${status}: 1 in ${oneIn} PRs wasted` : `0% — ${status}`
+                        return <Badge variant="secondary" className={`shrink-0 border px-2.5 py-0.5 text-xs font-medium ${variantClass}`}>{badgeText}</Badge>
+                      })()}
+                    </div>
+                  </CardHeader>
                   <CardContent>
-                    <ChartContainer config={{ Merged:{label:'Merged',color:'var(--chart-2)'}, Abandoned:{label:'Abandoned',color:'var(--chart-3)'}, Open:{label:'Open',color:'var(--chart-5)'} }} className="mx-auto aspect-square max-h-[220px]">
+                    <ChartContainer config={{ "Merged (good)": { label: "Merged (good)", color: "var(--chart-2)" }, "Closed without merge (wasted)": { label: "Closed without merge (wasted)", color: "var(--chart-3)" }, "Still open": { label: "Still open", color: "var(--chart-5)" } }} className="mx-auto aspect-square max-h-[220px]">
                       <PieChart>
                         <Pie data={data.abandon?.segments ?? []} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={2}>
                           {(data.abandon?.segments ?? []).map((e:any)=> (<Cell key={e.label} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
                         </Pie>
                         <ChartTooltip content={<AbandonTip />} />
+                        <ChartLegend content={<ChartLegendContent nameKey="label" />} />
                       </PieChart>
                     </ChartContainer>
-                    <p className="mt-2 text-center text-xs text-muted-foreground">{data.abandon?.closed ?? 0} closed without merge of { (data.abandon?.merged ?? 0)+(data.abandon?.closed ?? 0)} terminated ({data.abandon?.abandonedRate?.toFixed(1) ?? '0'}%)</p>
+                    <div className="mt-2 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-2)" }} aria-hidden />Merged (good)</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-3)" }} aria-hidden />Closed without merge (wasted)</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-5)" }} aria-hidden />Still open</span>
+                    </div>
+                    <p className="mt-2 text-center text-xs text-muted-foreground">{data.abandon?.closed ?? 0} closed without merge of {(data.abandon?.merged ?? 0)+(data.abandon?.closed ?? 0)} closed ({(data.abandon?.abandonedRate ?? 0).toFixed(1)}%) — {(data.abandon?.abandonedRate ?? 0) >= 20 ? 'wasteful' : (data.abandon?.abandonedRate ?? 0) >= 10 ? 'watch' : 'healthy'}</p>
+                    <details className="mt-3 rounded-md border bg-muted/30 p-3">
+                      <summary className="cursor-pointer text-xs font-medium text-foreground">Learn</summary>
+                      <div className="mt-2 space-y-2 text-xs leading-relaxed text-muted-foreground">
+                        <p>Abandoned rate = closed without merge ÷ (merged + closed) × 100. Healthy &lt;10%, Watch 10–20%, Wasteful &gt;20%. High waste means 1 in {(() => { const r = data.abandon?.abandonedRate ?? 0; return r>0?Math.round(100/r):0 })()} PRs never ship — review scope, draft hygiene, and early feedback.</p>
+                        <Link to="/pulls?state=closed" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">View closed PRs →</Link>
+                      </div>
+                    </details>
                   </CardContent>
                 </Card>
               </div>
