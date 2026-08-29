@@ -96,6 +96,10 @@ type HybridStats struct {
 	HomeP50     float64          `json:"homeP50"`
 	GithubP50   float64          `json:"githubP50"`
 	DeltaHomeVsGithub float64    `json:"deltaHomeVsGithub"`
+	Cost           CostPerMerge    `json:"costPerMerge"`
+	NeedsAttention []WorkflowHybrid `json:"needsAttention"`
+	GlobalWastedMinutes int     `json:"globalWastedMinutes"`
+	GlobalWastedPct float64     `json:"globalWastedPct"`
 }
 
 func periodToSince(period string) time.Time {
@@ -156,6 +160,39 @@ func computeHybrid(snap Data, repo, period string, gran Granularity) HybridStats
 	if homeP50 > 0 && githubP50 > 0 {
 		delta = homeP50 - githubP50
 	}
+	cost := CostPerMergeOf(snap.Runs, snap.Pulls, repo, since)
+	globalWasted := 0
+	for _, w := range workflows {
+		globalWasted += w.WastedMinutes
+	}
+	globalWastedPct := 0.0
+	if totalMinutes > 0 {
+		globalWastedPct = float64(globalWasted) / float64(totalMinutes) * 100
+	}
+	needs := make([]WorkflowHybrid, 0, 5)
+	for _, w := range workflows {
+		if w.Runs < FlakeMinRuns {
+			continue
+		}
+		if w.FlakeScore >= 15 || w.FailureRate >= 20 || w.MTTRMedianMin >= 120 || w.WastedPct >= 25 {
+			needs = append(needs, w)
+		}
+	}
+	sort.Slice(needs, func(i, j int) bool {
+		if needs[i].FlakeScore != needs[j].FlakeScore {
+			return needs[i].FlakeScore > needs[j].FlakeScore
+		}
+		if needs[i].WastedMinutes != needs[j].WastedMinutes {
+			return needs[i].WastedMinutes > needs[j].WastedMinutes
+		}
+		if needs[i].FailureRate != needs[j].FailureRate {
+			return needs[i].FailureRate > needs[j].FailureRate
+		}
+		return needs[i].Key < needs[j].Key
+	})
+	if len(needs) > 5 {
+		needs = needs[:5]
+	}
 	return HybridStats{
 		Period: period, Gran: string(gran), Repo: repo,
 		Split: split, Workflows: workflows, Release: release,
@@ -165,6 +202,7 @@ func computeHybrid(snap Data, repo, period string, gran Granularity) HybridStats
 		OverallP50: overallP50, OverallP90: overallP90, OverallAvg: overallAvg,
 		TotalRuns: totalRuns, TotalMinutes: totalMinutes,
 		HomeP50: homeP50, GithubP50: githubP50, DeltaHomeVsGithub: delta,
+		Cost: cost, NeedsAttention: needs, GlobalWastedMinutes: globalWasted, GlobalWastedPct: globalWastedPct,
 	}
 }
 
@@ -212,7 +250,41 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 	now := time.Now().UTC()
 	since90 := now.AddDate(0, 0, -90)
 	since30 := now.AddDate(0, 0, -30)
+	since180 := now.AddDate(0, 0, -180)
 	cycle := CycleStatsOf(snap.Pulls, since90)
+	// trailing 90d for delta: window [since180, since90)
+	var trailingCycle CycleStats
+	{
+		var trailingDays []float64
+		for _, p := range snap.Pulls {
+			if p.State != "MERGED" || p.MergedAt == nil {
+				continue
+			}
+			if p.MergedAt.Before(since180) || !p.MergedAt.Before(since90) {
+				continue
+			}
+			d := p.MergedAt.Sub(p.CreatedAt).Hours() / 24
+			if d < 0 {
+				d = 0
+			}
+			trailingDays = append(trailingDays, d)
+		}
+		if len(trailingDays) > 0 {
+			sorted := sortedCopy(trailingDays)
+			trailingCycle.P50 = Percentile(sorted, 50)
+			trailingCycle.P90 = Percentile(sorted, 90)
+			trailingCycle.Count = len(trailingDays)
+			trailingCycle.WindowDays = 90
+		}
+	}
+	if trailingCycle.Count > 0 && cycle.Count > 0 {
+		cycle.PrevP50 = trailingCycle.P50
+		cycle.PrevP90 = trailingCycle.P90
+		cycle.PrevCount = trailingCycle.Count
+		if trailingCycle.P50 > 0 {
+			cycle.DeltaPct = (cycle.P50 - trailingCycle.P50) / trailingCycle.P50 * 100
+		}
+	}
 	// fallback to all-time if window empty but org has merges
 	if cycle.Count == 0 {
 		all := CycleStatsOf(snap.Pulls, time.Time{})
@@ -244,6 +316,54 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 			}
 		}
 		heroBus = BusFactorOf(windowContribs, merged90)
+	}
+	// per-repo max and trend for bus
+	{
+		// per-repo max top3Share in 90d window
+		maxShare := 0.0
+		maxRepo := ""
+		repoSet := map[string]bool{}
+		for _, p := range windowPulls90 {
+			repoSet[p.Repo] = true
+		}
+		for repo := range repoSet {
+			var repoPulls []Pull
+			for _, p := range windowPulls90 {
+				if p.Repo == repo {
+					repoPulls = append(repoPulls, p)
+				}
+			}
+			if len(repoPulls) == 0 {
+				continue
+			}
+			rc := Contributors(repoPulls)
+			bf := BusFactorOf(rc, len(repoPulls))
+			if bf.Top3Share > maxShare {
+				maxShare = bf.Top3Share
+				maxRepo = repo
+			}
+		}
+		heroBus.PerRepoMax = maxShare
+		heroBus.PerRepoMaxRepo = maxRepo
+		// trend vs trailing 90d
+		var trailingPulls90 []Pull
+		for _, p := range snap.Pulls {
+			if p.State != "MERGED" || p.MergedAt == nil {
+				continue
+			}
+			if p.MergedAt.Before(since180) || !p.MergedAt.Before(since90) {
+				continue
+			}
+			trailingPulls90 = append(trailingPulls90, p)
+		}
+		if len(trailingPulls90) > 0 {
+			trc := Contributors(trailingPulls90)
+			prevBus := BusFactorOf(trc, len(trailingPulls90))
+			heroBus.PrevTop3Share = prevBus.Top3Share
+			if prevBus.Top3Share > 0 {
+				heroBus.TrendPct = heroBus.Top3Share - prevBus.Top3Share
+			}
+		}
 	}
 	heroNote := "90d window"
 	if cycle.WindowDays == 0 {
@@ -455,13 +575,31 @@ func computeInsightsVersion(snap Data, repo, period string, gran Granularity, ve
 	}
 
 	// Vision: DORA-lite (TShirt, LeadTime, WIP, Abandon), Flaky, Hybrid — all derived from same since window
-	tshirt := TShirtDistribution(snap.Pulls)
+	// T-shirt: filter by repo + period (MergedAt window) for correct PRs count; WIP always 90d sparkline per vision
+	tshirtPulls := snap.Pulls
+	if repo != "" || !since.IsZero() {
+		filtered := make([]Pull, 0, len(snap.Pulls))
+		for _, p := range snap.Pulls {
+			if repo != "" && p.Repo != repo {
+				continue
+			}
+			if !since.IsZero() {
+				if p.State == "MERGED" {
+					if p.MergedAt == nil || p.MergedAt.Before(since) {
+						continue
+					}
+				} else {
+					continue
+				}
+			}
+			filtered = append(filtered, p)
+		}
+		tshirtPulls = filtered
+	}
+	tshirt := TShirtDistribution(tshirtPulls)
 	leadTime := LeadTimeSeries(snap.Pulls, repo, gran, since)
 	leadOverall := LeadTimeStats(snap.Pulls, repo, since)
-	wip := LittleLawOf(snap.Pulls, repo, 30)
-	if period == "3m" {
-		wip = LittleLawOf(snap.Pulls, repo, 90)
-	}
+	wip := LittleLawOf(snap.Pulls, repo, 90)
 	abandon := AbandonmentOf(snap.Pulls, repo, since)
 	flaky := FlakyStats(snap.Runs, repo, since)
 	cost := CostPerMergeOf(snap.Runs, snap.Pulls, repo, since)
@@ -506,6 +644,29 @@ func computeInsightsVersion(snap Data, repo, period string, gran Granularity, ve
 }
 
 // ---- JSON handlers ----
+
+
+// ---- Entire join API helpers (vision-entire.md) ----
+func parseEntireWindow(fromStr, toStr string) (from, to time.Time) {
+	if fromStr != "" { if t, err := time.Parse("2006-01-02", fromStr); err == nil { from = t } }
+	if toStr != "" { if t, err := time.Parse("2006-01-02", toStr); err == nil { to = t.AddDate(0,0,1) } }
+	if !from.IsZero() && !to.IsZero() && from.After(to) { from, to = to.AddDate(0,0,-1), from.AddDate(0,0,1) }
+	return
+}
+func computeEntireJoin(snap Data, entSnap entireSnapshot, fromStr, toStr, repoFilter string, now time.Time) (join []RepoJoinPoint, guard *StreakGuard, coach *TokenCoach, brush *BrushMeta) {
+	from, to := parseEntireWindow(fromStr, toStr)
+	if entSnap.Activity != nil { gv := StreakGuardOf(entSnap.Activity.Stats, entSnap.Activity.Daily, now); guard = &gv }
+	if entSnap.Recap != nil { cv := TokenCoachOf(entSnap.Recap.Agents, entireStats{}); if entSnap.Activity != nil { cv = TokenCoachOf(entSnap.Recap.Agents, entSnap.Activity.Stats) }; coach = &cv }
+	if entSnap.Activity != nil {
+		join = EntireRepoJoin(entSnap.Activity, entSnap.Recap, snap.Pulls, from, to)
+		if repoFilter != "" { filtered := join[:0]; for _, j := range join { if j.Short == repoFilter || j.Repo == repoFilter { filtered = append(filtered, j) } }; join = filtered }
+	}
+	var minDate, maxDate string
+	if entSnap.Recap != nil && len(entSnap.Recap.Daily) > 0 { minDate = entSnap.Recap.Daily[0].Date; maxDate = entSnap.Recap.Daily[0].Date; for _, d := range entSnap.Recap.Daily { if d.Date < minDate { minDate = d.Date }; if d.Date > maxDate { maxDate = d.Date } }
+	} else if entSnap.Activity != nil && len(entSnap.Activity.Daily) > 0 { minDate = entSnap.Activity.Daily[0].Date; maxDate = entSnap.Activity.Daily[0].Date; for _, d := range entSnap.Activity.Daily { if d.Date < minDate { minDate = d.Date }; if d.Date > maxDate { maxDate = d.Date } } }
+	if minDate != "" { brush = &BrushMeta{MinDate: minDate, MaxDate: maxDate, From: fromStr, To: toStr} }
+	return
+}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

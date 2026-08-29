@@ -970,6 +970,7 @@ type WorkflowHybrid struct {
 	FailureRate    float64     `json:"failureRate"`
 	P50Min         float64     `json:"p50Min"`
 	P90Min         float64     `json:"p90Min"`
+	P95Min         float64     `json:"p95Min"`
 	P99Min         float64     `json:"p99Min"`
 	AvgMin         float64     `json:"avgMin"`
 	MinMin         float64     `json:"minMin,omitempty"`
@@ -987,6 +988,11 @@ type WorkflowHybrid struct {
 	FlakeScore     float64     `json:"flakeScore"`
 	Flaky          int         `json:"flaky"`
 	DeltaMin       float64     `json:"deltaMin"`
+	MTTRMedianMin  float64     `json:"mttrMedianMin"`
+	MTTRMeanMin    float64     `json:"mttrMeanMin"`
+	MTTRCount      int         `json:"mttrCount"`
+	WastedMinutes  int         `json:"wastedMinutes"`
+	WastedPct      float64     `json:"wastedPct"`
 	LastRunAt      *time.Time  `json:"lastRunAt,omitempty"`
 	LastConclusion string      `json:"lastConclusion"`
 }
@@ -1019,6 +1025,8 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 		lastAt *time.Time
 		lastConclusion string
 		flakyRuns []Run
+		totalMin int
+		wastedMin int
 	}
 	aggs := map[string]*wfAgg{}
 	for _, r := range filtered {
@@ -1028,12 +1036,15 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 			a = &wfAgg{repo: r.Repo, wf: r.Workflow}
 			aggs[key] = a
 		}
-		a.durations = append(a.durations, float64(r.DurationSec)/60)
+		durMin := float64(r.DurationSec) / 60
+		a.durations = append(a.durations, durMin)
+		a.totalMin += r.DurationSec / 60
 		switch r.Conclusion {
 		case "success":
 			a.success++
 		case "failure":
 			a.failure++
+			a.wastedMin += r.DurationSec / 60
 		default:
 			a.other++
 		}
@@ -1062,15 +1073,14 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 	// totalMinutes for budget share denominator
 	totalMinutes := 0
 	for _, a := range aggs {
-		for _, d := range a.durations {
-			totalMinutes += int(d)
-		}
+		totalMinutes += a.totalMin
 	}
 	out := make([]WorkflowHybrid, 0, len(aggs))
 	for key, a := range aggs {
 		sorted := sortedCopy(a.durations)
 		p50 := Percentile(sorted, 50)
 		p90 := Percentile(sorted, 90)
+		p95 := Percentile(sorted, 95)
 		p99 := Percentile(sorted, 99)
 		avg := meanFloat(sorted)
 		min := sorted[0]
@@ -1093,24 +1103,26 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 			qMed = Percentile(sq, 50)
 		}
 		// budget share
-		wfMinutes := 0
-		for _, d := range a.durations {
-			wfMinutes += int(d)
-		}
+		wfMinutes := a.totalMin
 		budget := 0.0
 		if totalMinutes > 0 {
 			budget = float64(wfMinutes) / float64(totalMinutes) * 100
 		}
 		// flake score
 		flaky, _, flakeScore := FlakeScore(a.flakyRuns)
-		_ = flaky
+		sort.Slice(a.flakyRuns, func(i, j int) bool { return a.flakyRuns[i].CreatedAt.Before(a.flakyRuns[j].CreatedAt) })
+		mttrMed, mttrMean, mttrCount := MTTRForRuns(a.flakyRuns)
+		wastedPct := 0.0
+		if a.totalMin > 0 {
+			wastedPct = float64(a.wastedMin) / float64(a.totalMin) * 100
+		}
 		// delta vs github/home global median placeholder - compute after global known? use 0 for now, fill later
 		delta := 0.0
 		out = append(out, WorkflowHybrid{
 			Repo: a.repo, Workflow: a.wf, Key: key,
 			Runs: len(a.durations), Success: a.success, Failure: a.failure, Other: a.other,
 			SuccessRate: sr, FailureRate: fr,
-			P50Min: p50, P90Min: p90, P99Min: p99, AvgMin: avg,
+			P50Min: p50, P90Min: p90, P95Min: p95, P99Min: p99, AvgMin: avg,
 			MinMin: min, MaxMin: max,
 			ThresholdP50: P50ThresholdMin, ThresholdP90: P90ThresholdMin,
 			IsSlow: isSlow, IsSampleSmall: isSmall,
@@ -1118,6 +1130,8 @@ func WorkflowHybridStats(runs []Run, repo string, since time.Time) []WorkflowHyb
 			BudgetSharePct: budget, QueueMedianMin: qMed,
 			FlakeScore: flakeScore, Flaky: flaky,
 			DeltaMin: delta,
+			MTTRMedianMin: mttrMed, MTTRMeanMin: mttrMean, MTTRCount: mttrCount,
+			WastedMinutes: a.wastedMin, WastedPct: wastedPct,
 			LastRunAt: a.lastAt, LastConclusion: a.lastConclusion,
 		})
 	}
@@ -1454,305 +1468,5 @@ func OverallHybridStats(runs []Run, repo string, since time.Time) (p50, p90, avg
 
 // ---- Dora helper for overview shipping bucket already defined elsewhere ----
 
-// ---- Entire join helpers (vision-entire.md minimal) ----
-
-type RepoJoinPoint struct {
-	Repo          string         `json:"repo"`
-	Short         string         `json:"short"`
-	Checkpoints   int            `json:"checkpoints"`
-	MergedPRs     int            `json:"mergedCount"`
-	Tokens        int64          `json:"tokens"`
-	DominantAgent string         `json:"dominantAgent"`
-	Agents        map[string]int `json:"agents"`
-	AddedLines    int            `json:"addedLines"`
-	BubbleSize    int            `json:"bubbleSize"`
-	CpPerPR       float64        `json:"cpPerPR"`
-}
-
-func EntireRepoJoin(activity *entireActivity, recap *entireRecap, pulls []Pull, windowFrom, windowTo time.Time) []RepoJoinPoint {
-	if activity == nil {
-		return nil
-	}
-	// pulls by repo short name
-	pullsByRepo := map[string]int{}
-	addedByRepo := map[string]int{}
-	for _, p := range pulls {
-		if p.State != "MERGED" || p.MergedAt == nil {
-			continue
-		}
-		if !windowFrom.IsZero() && p.MergedAt.Before(windowFrom) {
-			continue
-		}
-		if !windowTo.IsZero() && !p.MergedAt.Before(windowTo) {
-			continue
-		}
-		short := p.Repo
-		if idx := strings.LastIndex(short, "/"); idx >= 0 {
-			short = short[idx+1:]
-		}
-		pullsByRepo[short]++
-		addedByRepo[short] += p.Additions
-	}
-	// tokens map per agent not per repo, so keep zero
-	keys := map[string]bool{}
-	for _, r := range activity.Repos {
-		short := r.Repo
-		if idx := strings.LastIndex(short, "/"); idx >= 0 {
-			short = short[idx+1:]
-		}
-		keys[short] = true
-	}
-	for k := range pullsByRepo {
-		keys[k] = true
-	}
-	out := make([]RepoJoinPoint, 0, len(keys))
-	for short := range keys {
-		// find activity row
-		var act *entireRepoAgg
-		for i := range activity.Repos {
-			s := activity.Repos[i].Repo
-			if idx := strings.LastIndex(s, "/"); idx >= 0 {
-				s = s[idx+1:]
-			}
-			if strings.EqualFold(s, short) {
-				act = &activity.Repos[i]
-				break
-			}
-		}
-		cp := 0
-		var agents map[string]int
-		dominant := ""
-		maxN := -1
-		if act != nil {
-			cp = act.Total
-			agents = act.Agents
-			for ag, n := range agents {
-				if n > maxN {
-					maxN = n
-					dominant = ag
-				}
-			}
-		}
-		merged := pullsByRepo[short]
-		added := addedByRepo[short]
-		cpPerPR := 0.0
-		if merged > 0 {
-			cpPerPR = float64(cp) / float64(merged)
-		}
-		if cp == 0 && merged == 0 {
-			continue
-		}
-		bubble := cp
-		if bubble == 0 {
-			bubble = merged * 5
-		}
-		// find full repo name
-		full := short
-		if act != nil {
-			full = act.Repo
-		}
-		out = append(out, RepoJoinPoint{
-			Repo: full, Short: short, Checkpoints: cp, MergedPRs: merged,
-			Tokens: 0, DominantAgent: dominant, Agents: agents,
-			AddedLines: added, BubbleSize: bubble, CpPerPR: cpPerPR,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Checkpoints > out[j].Checkpoints })
-	return out
-}
-
-type StreakGuard struct {
-	Current         int     `json:"currentStreak"`
-	Lifetime        int     `json:"lifetimeStreak"`
-	LifetimeCurrent int     `json:"lifetimeCurrent"`
-	StreakField     int     `json:"streak"`
-	LastActiveDate  string  `json:"lastActiveDate"`
-	DaysSinceActive int     `json:"daysSinceActive"`
-	HoursLeftUTC    float64 `json:"hoursLeftUtc"`
-	State           string  `json:"state"`
-	Reason          string  `json:"reason"`
-	NeedToday       bool    `json:"needToday"`
-	ThroughputHint  string  `json:"throughputHint"`
-}
-
-func StreakGuardOf(stats entireStats, daily []entireDaily, now time.Time) StreakGuard {
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	sg := StreakGuard{
-		Current: stats.CurrentStreak, Lifetime: stats.LifetimeStreak, LifetimeCurrent: stats.LifetimeCurrent, StreakField: stats.Streak,
-	}
-	// find last active date
-	last := ""
-	for _, d := range daily {
-		sum := 0
-		for _, v := range d.Agents {
-			sum += v
-		}
-		if sum > 0 {
-			if d.Date > last {
-				last = d.Date
-			}
-		}
-	}
-	sg.LastActiveDate = last
-	if last != "" {
-		if t, err := time.Parse("2006-01-02", last); err == nil {
-			todayStr := now.UTC().Format("2006-01-02")
-			today, _ := time.Parse("2006-01-02", todayStr)
-			days := int(today.Sub(t).Hours() / 24)
-			if days < 0 {
-				days = 0
-			}
-			sg.DaysSinceActive = days
-		}
-	}
-	// hours left until next UTC midnight
-	nextMidnight := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day()+1, 0, 0, 0, 0, time.UTC)
-	sg.HoursLeftUTC = nextMidnight.Sub(now).Hours()
-	todayStr := now.UTC().Format("2006-01-02")
-	needToday := last != todayStr
-	sg.NeedToday = needToday && sg.Current > 0
-	if sg.Current == 0 {
-		if last == "" {
-			sg.State = "unknown"
-			sg.Reason = "No streak data yet"
-		} else {
-			sg.State = "broken"
-			sg.Reason = "Streak broken"
-		}
-	} else if !needToday {
-		sg.State = "safe"
-		sg.Reason = "Checked in today — streak safe"
-	} else if sg.HoursLeftUTC < 6 {
-		sg.State = "at_risk"
-		sg.Reason = "Streak at risk — checkpoint needed before 00:00 UTC"
-	} else {
-		sg.State = "at_risk"
-		sg.Reason = "Checkpoint needed today to keep streak"
-	}
-	sg.ThroughputHint = strings.TrimSpace(strings.ReplaceAll(time.Duration(stats.Throughput*1000).String(), "µs", ""))
-	if sg.ThroughputHint == "" {
-		sg.ThroughputHint = "—"
-	}
-	return sg
-}
-
-type TokenCoachAgent struct {
-	AgentID          string  `json:"agentId"`
-	AgentLabel       string  `json:"agentLabel"`
-	TokensPerCP      float64 `json:"tokensPerCp"`
-	TokensPerFile    float64 `json:"tokensPerFile"`
-	TokensPerSession float64 `json:"tokensPerSession"`
-	TranscriptRatio  float64 `json:"transcriptRatio"`
-	ToolMixShellPct  float64 `json:"shellPct"`
-	ToolMixMCPPct    float64 `json:"mcpPct"`
-	Tier             string  `json:"tier"`
-	Tips             []string `json:"tips"`
-}
-
-type TokenCoach struct {
-	RollupTokensPerCP   float64           `json:"rollupTokensPerCp"`
-	RollupTokensPerFile float64           `json:"rollupTokensPerFile"`
-	RollupThroughput    float64           `json:"throughput"`
-	ByAgent             []TokenCoachAgent `json:"byAgent"`
-	SummaryTip          string            `json:"summaryTip"`
-	WastedEstTokens     int64             `json:"wastedEstTokens"`
-}
-
-const (
-	TokenPerCP_Efficient = 1500
-	TokenPerCP_Heavy     = 4000
-	TranscriptRatioWarn  = 3.0
-	ShellPctWarn         = 60
-	MCPPctWarn           = 40
-)
-
-func TokenCoachOf(agents map[string]entireAgent, stats entireStats) TokenCoach {
-	tc := TokenCoach{RollupThroughput: stats.Throughput}
-	var totalTokens int64
-	var totalCP int
-	var totalFiles int
-	var wasted int64
-	var byAgent []TokenCoachAgent
-	for _, ag := range agents {
-		me := ag.Me
-		tpc := 0.0
-		if me.Checkpoints > 0 {
-			tpc = float64(me.Tokens) / float64(me.Checkpoints)
-		}
-		tpf := 0.0
-		if me.FilesChanged > 0 {
-			tpf = float64(me.Tokens) / float64(me.FilesChanged)
-		}
-		tps := 0.0
-		if me.Sessions > 0 {
-			tps = float64(me.Tokens) / float64(me.Sessions)
-		}
-		ratio := 0.0
-		if me.Tokens > 0 {
-			ratio = float64(me.TranscriptTokens) / float64(me.Tokens)
-		}
-		mixTotal := 0
-		if me.ToolMix != nil {
-			mixTotal = me.ToolMix.Shell + me.ToolMix.FileOps + me.ToolMix.Search + me.ToolMix.MCP + me.ToolMix.Agent + me.ToolMix.Other
-		}
-		shellPct := 0.0
-		mcpPct := 0.0
-		if mixTotal > 0 && me.ToolMix != nil {
-			shellPct = float64(me.ToolMix.Shell) / float64(mixTotal) * 100
-			mcpPct = float64(me.ToolMix.MCP) / float64(mixTotal) * 100
-		}
-		tier := "efficient"
-		if tpc > TokenPerCP_Heavy {
-			tier = "heavy"
-		} else if tpc > TokenPerCP_Efficient {
-			tier = "moderate"
-		}
-		var tips []string
-		if tpc > TokenPerCP_Heavy {
-			tips = append(tips, "Heavy per-checkpoint — try smaller prompts")
-		}
-		if ratio > TranscriptRatioWarn {
-			tips = append(tips, "Transcript churn — prune history")
-		}
-		if shellPct > ShellPctWarn {
-			tips = append(tips, "Shell-heavy — batch file reads")
-		}
-		if mcpPct > MCPPctWarn {
-			tips = append(tips, "MCP-heavy — check server caching")
-		}
-		if len(tips) > 3 {
-			tips = tips[:3]
-		}
-		byAgent = append(byAgent, TokenCoachAgent{
-			AgentID: ag.AgentID, AgentLabel: ag.AgentLabel,
-			TokensPerCP: tpc, TokensPerFile: tpf, TokensPerSession: tps,
-			TranscriptRatio: ratio, ToolMixShellPct: shellPct, ToolMixMCPPct: mcpPct,
-			Tier: tier, Tips: tips,
-		})
-		totalTokens += me.Tokens
-		totalCP += me.Checkpoints
-		totalFiles += me.FilesChanged
-		if me.TranscriptTokens > me.Tokens {
-			wasted += me.TranscriptTokens - me.Tokens
-		}
-	}
-	if totalCP > 0 {
-		tc.RollupTokensPerCP = float64(totalTokens) / float64(totalCP)
-	}
-	if totalFiles > 0 {
-		tc.RollupTokensPerFile = float64(totalTokens) / float64(totalFiles)
-	}
-	tc.WastedEstTokens = wasted
-	sort.Slice(byAgent, func(i, j int) bool { return byAgent[i].TokensPerCP > byAgent[j].TokensPerCP })
-	tc.ByAgent = byAgent
-	if tc.RollupTokensPerCP > TokenPerCP_Heavy {
-		tc.SummaryTip = "Heavy — keep checkpoints scoped to one task"
-	} else if tc.RollupTokensPerCP > TokenPerCP_Efficient {
-		tc.SummaryTip = "Moderate — coach: keep checkpoints scoped"
-	} else {
-		tc.SummaryTip = "Efficient — lean batching"
-	}
-	return tc
-}
+// ---- Entire join helpers moved to entire.go (see there) ----
+// RepoJoinPoint, EntireRepoJoin, StreakGuard, TokenCoach defined in entire.go

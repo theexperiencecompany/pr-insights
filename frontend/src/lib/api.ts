@@ -255,7 +255,7 @@ export interface WorkflowHybrid {
   runs: number
   success: number; failure: number; other: number
   successRate: number; failureRate: number
-  p50Min: number; p90Min: number; p99Min: number; avgMin: number
+  p50Min: number; p90Min: number; p95Min: number; p99Min: number; avgMin: number
   minMin?: number; maxMin?: number
   thresholdP50: number; thresholdP90: number
   isSlow: boolean; isSampleSmall: boolean
@@ -265,6 +265,8 @@ export interface WorkflowHybrid {
   queueMedianMin: number
   flakeScore: number; flaky: number
   deltaMin: number
+  mttrMedianMin: number; mttrMeanMin: number; mttrCount: number
+  wastedMinutes: number; wastedPct: number
   lastRunAt: string | null
   lastConclusion: string
 }
@@ -286,6 +288,10 @@ export interface HybridData {
   overallP50: number; overallP90: number; overallAvg: number
   totalRuns: number; totalMinutes: number
   homeP50: number; githubP50: number; deltaHomeVsGithub: number
+  costPerMerge: CostPerMerge
+  needsAttention: WorkflowHybrid[]
+  globalWastedMinutes: number
+  globalWastedPct: number
 }
 
 export interface InsightsData {
@@ -476,7 +482,7 @@ export interface EntireData {
   brushMeta?: { minDate: string; maxDate: string; from?: string; to?: string }
 }
 
-export const getEntire = (): Promise<EntireData> => fetch('/api/entire', { cache: 'no-store' }).then(json<EntireData>)
+export const getEntire = (params: {from?:string;to?:string;repo?:string} = {}): Promise<EntireData> => fetch(`/api/entire${qs(params)}`, { cache: 'no-store' }).then(json<EntireData>)
 
 export const triggerEntireSync = (): Promise<void> =>
   fetch('/api/entire/sync', { method: 'POST' }).then(() => undefined)

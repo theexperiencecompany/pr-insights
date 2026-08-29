@@ -110,13 +110,30 @@ type BrushMeta struct {
 func (s *Server) handleEntire(w http.ResponseWriter, r *http.Request) {
 	snap := s.entire.Snapshot()
 	storeSnap := s.store.Snapshot()
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	repoFilter := r.URL.Query().Get("repo")
+	var from, to time.Time
+	if fromStr != "" {
+		if t, err := time.Parse("2006-01-02", fromStr); err == nil {
+			from = t
+		}
+	}
+	if toStr != "" {
+		if t, err := time.Parse("2006-01-02", toStr); err == nil {
+			to = t.AddDate(0, 0, 1)
+		}
+	}
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		from, to = to.AddDate(0,0,-1), from.AddDate(0,0,1)
+	}
 	// Vision: join checkpoints->PRs, streak guard, token coach (+ brush meta) — in-memory derived, no new sync
 	var join []RepoJoinPoint
 	var guard *StreakGuard
 	var coach *TokenCoach
 	var brush *BrushMeta
 	if snap.Activity != nil && snap.Recap != nil {
-		join = EntireRepoJoin(snap.Activity, snap.Recap, storeSnap.Pulls, time.Time{}, time.Time{})
+		join = EntireRepoJoin(snap.Activity, snap.Recap, storeSnap.Pulls, from, to)
 		g := StreakGuardOf(snap.Activity.Stats, snap.Activity.Daily, time.Now().UTC())
 		guard = &g
 		c := TokenCoachOf(snap.Recap.Agents, snap.Activity.Stats)
@@ -148,7 +165,19 @@ func (s *Server) handleEntire(w http.ResponseWriter, r *http.Request) {
 					maxDate = d.Date
 				}
 			}
-			brush = &BrushMeta{MinDate: minDate, MaxDate: maxDate}
+			brush = &BrushMeta{MinDate: minDate, MaxDate: maxDate, From: fromStr, To: toStr}
+		}
+		if len(join)==0 && snap.Activity!=nil {
+			join = EntireRepoJoin(snap.Activity, snap.Recap, storeSnap.Pulls, from, to)
+			if repoFilter != "" {
+				filtered := join[:0]
+				for _, j := range join {
+					if j.Short == repoFilter || j.Repo == repoFilter {
+						filtered = append(filtered, j)
+				}
+				}
+				join = filtered
+			}
 		}
 	} else if snap.Recap != nil {
 		c := TokenCoachOf(snap.Recap.Agents, entireStats{})
