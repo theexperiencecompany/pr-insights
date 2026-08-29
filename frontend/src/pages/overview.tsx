@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Loader2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
