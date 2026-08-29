@@ -32,7 +32,6 @@ import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
 
-// T-SHIRT FIX: PR size — how big are our changes? 769 merged — Tiny <10 lines — typo fix ... Massive 1000+ lines — XS–XXL muted small for power users — Tiny 75 (9.8%) legend — Most are Massive (41%) center — Consider splitting — 319 Massive avg X days to merge vs 75 Tiny Y days. Try <300 lines — Learn expand bucket definition table 0–10 11–50 51–200 201–500 501–1000 1000+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -752,10 +751,7 @@ export default function InsightsPage() {
   const [expandedWf, setExpandedWf] = useState<string | null>(null)
   const [wfRuns, setWfRuns] = useState<Record<string, WorkflowRun[]>>({})
   const [runsLoading, setRunsLoading] = useState<string | null>(null)
-  const [wipExpanded, setWipExpanded] = useState(false)
-  const [tshirtExpanded, setTshirtExpanded] = useState(false)
-  const [leadExpanded, setLeadExpanded] = useState(false)
-  const [abandonExpanded, setAbandonExpanded] = useState(false)
+  // disclosure via details
   const toggleExpand = async (key: string, repo: string, workflow: string) => {
     if (expandedWf === key) {
       setExpandedWf(null)
@@ -1179,324 +1175,352 @@ export default function InsightsPage() {
             </>
           )}
 
-          {/* VISION DORA-lite — see docs/vision-dora-lite.md | PROGRESSIVE DISCLOSURE wrapper */}
+          {/* DORA-lite flow health */}
           {data.tshirt && data.tshirt.length > 0 ? (
             <div className="mt-6">
-              {/* PROGRESSIVE DISCLOSURE header: Flow health — <5s check (467 merges) */}
-              <SectionHeading>Flow health — &lt;5s check ({(data.leadOverall?.count ?? data.tshirt.reduce((s:any,x:any)=>s+x.count,0) ?? 467)} merges)</SectionHeading>
-              <p className="text-xs text-muted-foreground">Fast & safe? Green healthy, amber watch, red action — hover any card for plain English</p>
+              <SectionHeading>Flow health</SectionHeading>
+              <p className="mt-1 truncate text-xs text-muted-foreground">Small changes shipped quickly with steady flow</p>
               <div className="mt-3 grid gap-4 md:grid-cols-2">
-                {/* Card 1: T-shirt size — collapsed shows only plain English + big number + color dot + trend, Learn expands to jargon */}
-                <Card title="Plain English: small changes are quicker to review — hover any card for plain English">
+                <Card className="border border-border/50 rounded-lg shadow-none">
                   {(() => {
-                    const total = data.tshirt.reduce((s:any,x:any)=>s+x.count,0)
-                    const humanMap: Record<string,string> = { XS:"Tiny", S:"Small", M:"Medium", L:"Large", XL:"XL", XXL:"Massive" }
-                    const most = [...data.tshirt].sort((a:any,b:any)=>b.count-a.count)[0]
+                    const total = data.tshirt.reduce((s: any, x: any) => s + x.count, 0)
+                    const humanMap: Record<string, string> = { XS: "Tiny", S: "Small", M: "Medium", L: "Large", XL: "XL", XXL: "Massive" }
+                    const most = [...data.tshirt].sort((a: any, b: any) => b.count - a.count)[0]
                     const mostHuman = most?.human ?? humanMap[most?.size] ?? most?.size ?? ""
                     const mostPct = most?.pct ?? 0
-                    const xxl = data.tshirt.find((s:any)=>s.size==="XXL")
-                    const tiny = data.tshirt.find((s:any)=>s.size==="XS")
+                    const xxl = data.tshirt.find((s: any) => s.size === "XXL")
                     const xxlPct = xxl?.pct ?? 0
-                    // health: green if XXL <5%, amber 5-10%, red >10% — matches vision "Consider splitting — >10%"
-                    const health: "green"|"amber"|"red" = xxlPct > 10 ? "red" : xxlPct > 5 ? "amber" : "green"
-                    const dotClass = health==="green" ? "bg-green-500" : health==="amber" ? "bg-amber-500" : "bg-red-500"
-                    const plainTitle = "How big are our changes?"
-                    const plainDesc = health==="green" ? "Changes are nicely sized for review" : health==="amber" ? "Changes are a bit large — watch size" : "A few very large changes — consider splitting"
-                    const bigNumber = `${mostHuman} ${mostPct.toFixed(0)}%`
-                    const trendText = health==="red" ? "⚠ XXL >10% — split large PRs" : health==="amber" ? "→ trending larger" : "✓ mostly small & reviewable"
-                    const showCallout = xxl && xxl.pct > 10
-                    const xxlAvg = typeof xxl?.avgDays === "number" ? xxl.avgDays.toFixed(1) : "—"
-                    const tinyAvg = typeof tiny?.avgDays === "number" ? tiny.avgDays.toFixed(1) : "—"
-                    const xxlHuman = xxl?.human ?? "Massive"
-                    const tinyHuman = tiny?.human ?? "Tiny"
+                    const health: "green" | "amber" | "red" = xxlPct > 10 ? "red" : xxlPct > 5 ? "amber" : "green"
+                    const dotClass = health === "green" ? "bg-green-500" : health === "amber" ? "bg-amber-500" : "bg-red-500"
+                    const badgeClass =
+                      health === "green"
+                        ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-900"
+                        : health === "amber"
+                          ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900"
+                          : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-900"
+                    const label = health === "green" ? "Healthy" : health === "amber" ? "Watch" : "Action"
                     return (
                       <>
                         <CardHeader className="pb-2">
                           <div className="flex items-center justify-between gap-2">
-                            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                              <span className={`inline-block size-2.5 rounded-full ${dotClass}`} aria-hidden />
-                              {plainTitle}
+                            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                              <span className={`size-2 rounded-full ${dotClass}`} aria-hidden />
+                              Change size
                             </CardTitle>
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${health==="green" ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-900" : health==="amber" ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300" : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300"}`}>{health==="green" ? "Healthy" : health==="amber" ? "Watch" : "Action"}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{label}</span>
                           </div>
-                          <CardDescription className="text-xs text-muted-foreground">{plainDesc}</CardDescription>
+                          <CardDescription className="truncate text-xs">
+                            {health === "green"
+                              ? "Changes are small and easy to review"
+                              : health === "amber"
+                                ? "Some changes are large"
+                                : "Many large changes need splitting"}
+                          </CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-baseline justify-between gap-2">
-                            <div>
-                              <div className="text-2xl font-semibold tabular-nums">{bigNumber}</div>
-                              <div className="text-[11px] text-muted-foreground">{total} merged · Most are {mostHuman}</div>
+                            <div className="text-2xl font-semibold tabular-nums">
+                              {mostHuman} {mostPct.toFixed(0)}%
                             </div>
-                            <span className={`size-3 rounded-full ${dotClass}`} title={plainDesc} aria-label={health} />
+                            <span className={`size-3 rounded-full ${dotClass}`} aria-label={health} />
                           </div>
-                          <div className="mt-2 text-xs text-muted-foreground">{trendText}</div>
-                          {/* minimal trend spark: show distribution dots as plain trend without jargon */}
+                          <p className="truncate text-[11px] text-muted-foreground">{total} merged</p>
+                          <ChartContainer
+                            config={{
+                              XS: { label: "Tiny", color: "var(--chart-2)" },
+                              S: { label: "Small", color: "var(--chart-1)" },
+                              M: { label: "Medium", color: "#1f883d" },
+                              L: { label: "Large", color: "#d29922" },
+                              XL: { label: "XL", color: "#cf222e" },
+                              XXL: { label: "Massive", color: "#82071e" },
+                            }}
+                            className="mx-auto mt-3 aspect-square max-h-[180px]"
+                          >
+                            <PieChart>
+                              <Pie data={data.tshirt} dataKey="count" nameKey="size" cx="50%" cy="50%" innerRadius={38} outerRadius={64} paddingAngle={2}>
+                                {data.tshirt.map((e: any) => (
+                                  <Cell key={e.size} fill={e.color} stroke="var(--background)" strokeWidth={1} />
+                                ))}
+                              </Pie>
+                              <ChartTooltip content={<TShirtTip />} />
+                            </PieChart>
+                          </ChartContainer>
                           <div className="mt-2 flex flex-wrap gap-1">
-                            {data.tshirt.map((s:any)=>{
+                            {data.tshirt.map((s: any) => {
                               const human = s.human ?? humanMap[s.size] ?? s.size
                               return (
-                                <span key={s.size} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
-                                  <span className="inline-block size-2 rounded-full" style={{ background: s.color }} />
-                                  {human} {s.pct.toFixed(0)}%
+                                <span
+                                  key={s.size}
+                                  className="inline-flex items-center gap-1 rounded-full border border-border/50 px-2 py-0.5 text-[11px]"
+                                >
+                                  <span className="size-2 rounded-full" style={{ background: s.color }} />
+                                  {human} {s.count} ({s.pct.toFixed(1)}%)
                                 </span>
                               )
                             })}
                           </div>
-                          {showCallout ? (
-                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">Consider splitting — {xxl?.count} {xxlHuman} larger than ideal</div>
-                          ) : null}
-                          <button type="button" onClick={() => setTshirtExpanded((v) => !v)} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" aria-expanded={tshirtExpanded}>
-                            {tshirtExpanded ? "Hide details" : "Learn →"}
-                          </button>
-                          {tshirtExpanded ? (
-                            <div className="mt-3 rounded-md border bg-muted/30 p-3">
-                              <p className="text-xs font-medium text-foreground">Technical: T-shirt size (XS–XXL) by diff = additions + deletions</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Tiny &lt;10 lines — typo fix · Small 11–50 · Medium 51–200 · Large 201–500 · XL 501–1000 · Massive 1000+ lines — split it.</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Ideal &lt;10% Massive, aim &lt;300 lines for fast reviews. Buckets by diff = additions + deletions. Tiny &lt;10 lines — typo fix … Massive 1000+ lines — split it. XS–XXL</p>
-                              <p className="mt-1 text-[11px] font-medium text-muted-foreground">Formula: diff = additions + deletions · ideal thresholds: XS 0–10, S 11–50, M 51–200, L 201–500, XL 501–1000, XXL 1000+ · Technical band below</p>
-                              <div className="relative mx-auto mt-2 aspect-square max-h-[220px]">
-                                <ChartContainer config={{ XS:{label:'Tiny',color:'var(--chart-2)'}, S:{label:'Small',color:'var(--chart-1)'}, M:{label:'Medium',color:'#1f883d'}, L:{label:'Large',color:'#d29922'}, XL:{label:'XL',color:'#cf222e'}, XXL:{label:'Massive',color:'#82071e'} }} className="mx-auto aspect-square max-h-[220px]">
-                                  <PieChart>
-                                    <Pie data={data.tshirt} dataKey="count" nameKey="size" cx="50%" cy="50%" innerRadius={42} outerRadius={70} paddingAngle={2}>
-                                      {data.tshirt.map((e:any)=> (<Cell key={e.size} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
-                                    </Pie>
-                                    <ChartTooltip content={<TShirtTip />} />
-                                  </PieChart>
-                                </ChartContainer>
-                                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                                  <span className="text-xs font-medium text-muted-foreground">Most are</span>
-                                  <span className="text-sm font-semibold">{mostHuman} ({mostPct.toFixed(0)}%)</span>
-                                  <span className="text-[11px] text-muted-foreground">{total} merged</span>
-                                </div>
+                          <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                            <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
+                            <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                              <p>Buckets by diff additions plus deletions. Tiny 0 to 10, Small 11 to 50, Medium 51 to 200, Large 201 to 500, XL 501 to 1000, Massive over 1000.</p>
+                              {(() => {
+                                const tiny = data.tshirt.find((s: any) => s.size === "XS")
+                                const xxlAvg = typeof xxl?.avgDays === "number" ? xxl.avgDays.toFixed(1) : "—"
+                                const tinyAvg = typeof tiny?.avgDays === "number" ? tiny.avgDays.toFixed(1) : "—"
+                                return xxl ? (
+                                  <p>
+                                    {xxl.count} Massive avg {xxlAvg} days vs {tiny?.count ?? 0} Tiny {tinyAvg} days. Try under 300 lines.
+                                  </p>
+                                ) : null
+                              })()}
+                              <div className="overflow-x-auto">
+                                <Table>
+                                  <TableHeader>
+                                    <TableRow>
+                                      <TableHead className="text-xs">Bucket</TableHead>
+                                      <TableHead className="text-xs">Lines</TableHead>
+                                      <TableHead className="text-xs">Tip</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    <TableRow>
+                                      <TableCell className="text-xs">Tiny</TableCell>
+                                      <TableCell className="text-xs">0 to 10</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">typo fix</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-xs">Small</TableCell>
+                                      <TableCell className="text-xs">11 to 50</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">ideal</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-xs">Medium</TableCell>
+                                      <TableCell className="text-xs">51 to 200</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">reviewable</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-xs">Large</TableCell>
+                                      <TableCell className="text-xs">201 to 500</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">careful</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-xs">XL</TableCell>
+                                      <TableCell className="text-xs">501 to 1000</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">risky</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                      <TableCell className="text-xs">Massive</TableCell>
+                                      <TableCell className="text-xs">1000 plus</TableCell>
+                                      <TableCell className="text-xs text-muted-foreground">split it</TableCell>
+                                    </TableRow>
+                                  </TableBody>
+                                </Table>
                               </div>
-                              {xxl && (
-                                <p className="mt-2 text-[11px] text-muted-foreground">{xxl.count} {xxlHuman} avg {xxlAvg} days vs {tiny?.count ?? 0} {tinyHuman} {tinyAvg} days. Try &lt;300 lines</p>
-                              )}
-                              <details className="mt-2 rounded border bg-background px-2 py-1">
-                                <summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">Bucket table</summary>
-                                <div className="mt-2 overflow-x-auto">
-                                  <Table>
-                                    <TableHeader><TableRow><TableHead className="text-xs">Bucket</TableHead><TableHead className="text-xs">Human</TableHead><TableHead className="text-xs">Lines</TableHead><TableHead className="text-xs">Guidance</TableHead></TableRow></TableHeader>
-                                    <TableBody>
-                                      <TableRow><TableCell className="text-xs font-medium">XS</TableCell><TableCell className="text-xs">Tiny</TableCell><TableCell className="text-xs">0–10</TableCell><TableCell className="text-xs text-muted-foreground">typo fix · docs</TableCell></TableRow>
-                                      <TableRow><TableCell className="text-xs font-medium">S</TableCell><TableCell className="text-xs">Small</TableCell><TableCell className="text-xs">11–50</TableCell><TableCell className="text-xs text-muted-foreground">small fix · ideal</TableCell></TableRow>
-                                      <TableRow><TableCell className="text-xs font-medium">M</TableCell><TableCell className="text-xs">Medium</TableCell><TableCell className="text-xs">51–200</TableCell><TableCell className="text-xs text-muted-foreground">feature · reviewable</TableCell></TableRow>
-                                      <TableRow><TableCell className="text-xs font-medium">L</TableCell><TableCell className="text-xs">Large</TableCell><TableCell className="text-xs">201–500</TableCell><TableCell className="text-xs text-muted-foreground">large · careful</TableCell></TableRow>
-                                      <TableRow><TableCell className="text-xs font-medium">XL</TableCell><TableCell className="text-xs">XL</TableCell><TableCell className="text-xs">501–1000</TableCell><TableCell className="text-xs text-muted-foreground">x-large · risky</TableCell></TableRow>
-                                      <TableRow><TableCell className="text-xs font-medium">XXL</TableCell><TableCell className="text-xs">Massive</TableCell><TableCell className="text-xs">1000+</TableCell><TableCell className="text-xs text-muted-foreground">massive — split it</TableCell></TableRow>
-                                    </TableBody>
-                                  </Table>
-                                </div>
-                              </details>
                             </div>
-                          ) : null}
+                          </details>
                         </CardContent>
                       </>
                     )
                   })()}
                 </Card>
-                {/* Card 2: Lead-time — collapsed plain English */}
-                <Card title="Plain English: how quickly changes ship — hover any card for plain English">
+                <Card className="border border-border/50 rounded-lg shadow-none">
                   {(() => {
                     const p50 = data.leadOverall?.p50 ?? 0
                     const p90 = data.leadOverall?.p90 ?? 0
                     const count = data.leadOverall?.count ?? 0
-                    const health: "green"|"amber"|"red" = p50 > 4 || p90 > 14 ? "red" : p50 > 2 || p90 > 7 ? "amber" : "green"
-                    const dotClass = health==="green" ? "bg-green-500" : health==="amber" ? "bg-amber-500" : "bg-red-500"
-                    const plainTitle = "How fast do changes ship?"
-                    const plainDesc = health==="green" ? "Changes ship quickly" : health==="amber" ? "Shipping is slowing — keep PRs small" : "Shipping is slow — review queue"
-                    const bigNumber = p50 ? `${p50.toFixed(1)}d typical` : "—"
-                    const trendText = health==="green" ? "✓ within ideal" : health==="amber" ? "→ watch trend" : "⚠ needs action"
+                    const health: "green" | "amber" | "red" = p50 > 4 || p90 > 14 ? "red" : p50 > 2 || p90 > 7 ? "amber" : "green"
+                    const dotClass = health === "green" ? "bg-green-500" : health === "amber" ? "bg-amber-500" : "bg-red-500"
+                    const badgeClass =
+                      health === "green"
+                        ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300"
+                        : health === "amber"
+                          ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300"
+                          : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300"
+                    const label = health === "green" ? "Healthy" : health === "amber" ? "Watch" : "Action"
                     return (
                       <>
                         <CardHeader className="pb-2">
                           <div className="flex items-center justify-between gap-2">
-                            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                              <span className={`inline-block size-2.5 rounded-full ${dotClass}`} aria-hidden />
-                              {plainTitle}
+                            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                              <span className={`size-2 rounded-full ${dotClass}`} aria-hidden />
+                              Time to merge
                             </CardTitle>
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${health==="green" ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300" : health==="amber" ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300" : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300"}`}>{health==="green" ? "Healthy" : health==="amber" ? "Watch" : "Action"}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{label}</span>
                           </div>
-                          <CardDescription className="text-xs text-muted-foreground">{plainDesc}</CardDescription>
+                          <CardDescription className="truncate text-xs">Median {p50 ? p50.toFixed(1) + " days" : "—"}, 90 percent in {p90 ? p90.toFixed(1) + " days" : "—"}</CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-baseline justify-between gap-2">
-                            <div className="text-2xl font-semibold tabular-nums">{bigNumber}</div>
-                            <span className={`size-3 rounded-full ${dotClass}`} title={plainDesc} aria-label={health} />
+                            <div className="text-2xl font-semibold tabular-nums">{p50 ? `${p50.toFixed(1)} days` : "—"}</div>
+                            <span className={`size-3 rounded-full ${dotClass}`} aria-label={health} />
                           </div>
-                          <div className="text-[11px] text-muted-foreground">{count} merges · {trendText}</div>
-                          {data.leadTime && data.leadTime.length>0 ? (
-                            <div className="mt-2 h-[48px] w-full overflow-hidden rounded bg-muted/20">
-                              <ChartContainer config={{ v:{label:'Time',color: dotClass==="bg-green-500" ? "var(--chart-2)" : dotClass==="bg-amber-500" ? "#d29922" : "#cf222e"}} } className="h-[48px] w-full">
-                                <AreaChart data={data.leadTime.slice(-12)} margin={{ left:0, right:0, top:4, bottom:0 }}>
-                                  <Area type="monotone" dataKey="p50" stroke={health==="green" ? "var(--chart-2)" : health==="amber" ? "#d29922" : "#cf222e"} fill={health==="green" ? "var(--chart-2)" : health==="amber" ? "#d29922" : "#cf222e"} fillOpacity={0.15} strokeWidth={1.5} dot={false} />
-                                </AreaChart>
-                              </ChartContainer>
-                            </div>
-                          ) : null}
-                          <button type="button" onClick={() => setLeadExpanded((v) => !v)} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" aria-expanded={leadExpanded}>
-                            {leadExpanded ? "Hide details" : "Learn →"}
-                          </button>
-                          {leadExpanded ? (
-                            <div className="mt-3 rounded-md border bg-muted/30 p-3">
-                              <p className="text-xs font-medium text-foreground">Technical: Lead-time band · p50 {p50.toFixed(1)}d · p90 {p90.toFixed(1)}d (n={count})</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Ideal p50 &lt;2d, p90 &lt;7d · formula: leadDays = (MergedAt − CreatedAt) hours / 24</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">p50 solid · p90 light · band = Technical band (shaded area). Healthy &lt;2d green, 2–4d amber, &gt;4d red · p90 &lt;7d green, 7–14d amber, &gt;14d red</p>
-                              {data.leadTime && data.leadTime.length>0 ? (
-                                <ChartContainer config={{ p50:{label:'p50',color:'var(--chart-1)'}, p90:{label:'p90',color:'var(--chart-5)'} }} className="mt-2 h-[240px] w-full">
-                                  <AreaChart data={data.leadTime} margin={{ left:12, right:12, top:4 }}>
+                          <p className="truncate text-[11px] text-muted-foreground">{count} merges</p>
+                          <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                            <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
+                            <div className="mt-2 space-y-3">
+                              <p className="text-xs text-muted-foreground">p75 {(data.leadOverall as any)?.p75 ? (data.leadOverall as any).p75.toFixed(1) + " days" : "—"} and full distribution hidden until Learn.</p>
+                              {data.leadTime && data.leadTime.length > 0 ? (
+                                <ChartContainer config={{ p50: { label: "p50", color: "var(--chart-1)" }, p90: { label: "p90", color: "var(--chart-5)" } }} className="h-[180px] w-full">
+                                  <AreaChart data={data.leadTime} margin={{ left: 12, right: 12, top: 4 }}>
                                     <CartesianGrid vertical={false} />
                                     <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
-                                    <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v:number)=>`${v.toFixed(0)}d`} />
+                                    <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v: number) => `${v.toFixed(0)}d`} />
                                     <ChartTooltip content={<LeadTimeTip />} />
                                     <Area type="monotone" dataKey="p90" stroke="var(--chart-5)" fill="var(--chart-5)" fillOpacity={0.15} strokeWidth={1} dot={false} />
                                     <Area type="monotone" dataKey="p50" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.25} strokeWidth={2} dot={false} />
                                   </AreaChart>
                                 </ChartContainer>
-                              ) : <p className="text-xs text-muted-foreground">No lead-time data for this window.</p>}
-                              <p className="mt-1 text-center text-[11px] text-muted-foreground">p50 solid · p90 light · ideal p50 &lt;2d, p90 &lt;7d — Technical band</p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">No lead time data.</p>
+                              )}
+                              <p className="text-[11px] text-muted-foreground">Ideal median under 2 days, 90 percent under 7 days.</p>
                             </div>
-                          ) : null}
+                          </details>
                         </CardContent>
                       </>
                     )
                   })()}
                 </Card>
-                {/* Card 3: WIP — collapsed plain English */}
-                <Card title="Plain English: is work flowing or piling up? — hover any card for plain English">
+                <Card className="border border-border/50 rounded-lg shadow-none">
                   {(() => {
                     const wip = data.wip
                     const cur = wip?.currentWip ?? 0
                     const avg = wip?.avgWip ?? 0
                     const err = wip?.errorPct ?? 0
-                    const health: "green"|"amber"|"red" = err < 20 ? "green" : err < 40 ? "amber" : "red"
-                    const dotClass = health==="green" ? "bg-green-500" : health==="amber" ? "bg-amber-500" : "bg-red-500"
-                    const plainTitle = "Is work flowing?"
-                    const plainDesc = health==="green" ? "Work in progress is steady" : "Work is piling up — flow mismatch"
-                    const bigNumber = `${cur} open now`
-                    const trendText = health==="green" ? `✓ stable — avg ${avg.toFixed(1)}` : `⚠ predicted ${(wip?.predictedWip ?? 0).toFixed(1)} vs avg ${avg.toFixed(1)}`
+                    const health: "green" | "amber" | "red" = err < 20 ? "green" : err < 40 ? "amber" : "red"
+                    const dotClass = health === "green" ? "bg-green-500" : health === "amber" ? "bg-amber-500" : "bg-red-500"
+                    const badgeClass =
+                      health === "green"
+                        ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300"
+                        : health === "amber"
+                          ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300"
+                          : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300"
+                    const label = health === "green" ? "Healthy" : health === "amber" ? "Watch" : "Action"
                     return (
                       <>
                         <CardHeader className="pb-2">
                           <div className="flex items-center justify-between gap-2">
-                            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                              <span className={`inline-block size-2.5 rounded-full ${dotClass}`} aria-hidden />
-                              {plainTitle}
+                            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                              <span className={`size-2 rounded-full ${dotClass}`} aria-hidden />
+                              Work in progress
                             </CardTitle>
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${health==="green" ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300" : health==="amber" ? "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300" : "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300"}`}>{health==="green" ? "Healthy" : health==="amber" ? "Watch" : "Action"}</span>
+                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{label}</span>
                           </div>
-                          <CardDescription className="text-xs text-muted-foreground">{plainDesc}</CardDescription>
+                          <CardDescription className="truncate text-xs">Work in progress is steady</CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-baseline justify-between gap-2">
-                            <div className="text-2xl font-semibold tabular-nums">{bigNumber}</div>
-                            <span className={`size-3 rounded-full ${dotClass}`} title={plainDesc} aria-label={health} />
+                            <div className="text-2xl font-semibold tabular-nums">{cur} open now</div>
+                            <span className={`size-3 rounded-full ${dotClass}`} aria-label={health} />
                           </div>
-                          <div className="text-[11px] text-muted-foreground">Avg {avg.toFixed(1)} open · {trendText}</div>
-                          {wip?.points && wip.points.length>0 ? (
-                            <ChartContainer config={{ wip:{label:'Open',color:'var(--chart-1)'} }} className="mt-2 h-[48px] w-full">
-                              <AreaChart data={wip.points} margin={{ left:0, right:4, top:4 }}>
+                          {wip?.points && wip.points.length > 0 ? (
+                            <ChartContainer config={{ wip: { label: "Open", color: "var(--chart-1)" } }} className="mt-2 h-[48px] w-full">
+                              <AreaChart data={wip.points} margin={{ left: 0, right: 4, top: 4 }}>
                                 <CartesianGrid vertical={false} />
                                 <XAxis dataKey="date" hide />
-                                <YAxis hide domain={['dataMin','dataMax']} />
+                                <YAxis hide domain={["dataMin", "dataMax"]} />
                                 <ChartTooltip content={<WipTip />} />
                                 <Area type="monotone" dataKey="wip" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.15} strokeWidth={1.5} dot={false} />
                                 {avg ? <ReferenceLine y={avg} stroke="var(--chart-5)" strokeDasharray="3 3" /> : null}
                               </AreaChart>
                             </ChartContainer>
-                          ) : <p className="text-xs text-muted-foreground">No WIP data.</p>}
-                          <button type="button" onClick={() => setWipExpanded((v) => !v)} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" aria-expanded={wipExpanded}>
-                            {wipExpanded ? "Hide details" : "Learn →"}
-                          </button>
-                          {wipExpanded ? (
-                            <div className="mt-3 rounded-md border bg-muted/30 p-3">
-                              <p className="text-xs font-medium text-foreground">Technical: WIP · Little&apos;s Law — Work In Progress</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">WIP = count of open PRs. Little&apos;s Law: WIP ≈ throughput × cycle time (throughput × cycle time).</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Throughput {wip?.throughputPerDay?.toFixed(2) ?? '—'} PRs/day · cycle {wip?.cycleMeanDays?.toFixed(1) ?? '—'} days · window {wip?.windowDays ?? 90} days</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Ideal error &lt;20% stable, otherwise flow mismatch. Predicted {(wip?.predictedWip ?? 0).toFixed(1)} vs avg {avg.toFixed(1)} (err {err.toFixed(0)}%) — Technical band sparkline</p>
-                              {err < 20 ? (
-                                <p className="mt-1 text-xs text-green-600 dark:text-green-400">✓ WIP stable — predicted {(wip?.predictedWip ?? 0).toFixed(1)} close to avg {avg.toFixed(1)} (err {err.toFixed(0)}%)</p>
-                              ) : (
-                                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">⚠ WIP growing — predicted {(wip?.predictedWip ?? 0).toFixed(1)} vs avg {avg.toFixed(1)} (err {err.toFixed(0)}%) — flow mismatch, throughput/cycle diverge</p>
-                              )}
-                              <p className="mt-1 text-[11px] text-muted-foreground">Formula: WIP ≈ merges per day × days to merge — ideal thresholds: error &lt;20% healthy</p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No WIP data.</p>
+                          )}
+                          <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                            <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
+                            <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                              <p>
+                                Avg {avg.toFixed(1)} open, predicted {(wip?.predictedWip ?? 0).toFixed(1)} open, error {err.toFixed(0)} percent.
+                              </p>
+                              <p>Throughput {(wip?.throughputPerDay ?? 0).toFixed(2)} per day, cycle {(wip?.cycleMeanDays ?? 0).toFixed(1)} days, window {wip?.windowDays ?? 90} days.</p>
+                              <p>Flow is steady when error under 20 percent.</p>
                             </div>
-                          ) : null}
+                          </details>
                         </CardContent>
                       </>
                     )
                   })()}
                 </Card>
-                {/* Card 4: Abandonment — collapsed plain English */}
-                <Card title="Plain English: does work ship or get abandoned? — hover any card for plain English">
+                <Card className="border border-border/50 rounded-lg shadow-none">
                   {(() => {
                     const rate = data.abandon?.abandonedRate ?? 0
                     const closed = data.abandon?.closed ?? 0
                     const merged = data.abandon?.merged ?? 0
                     const totalClosed = merged + closed
-                    const health: "green"|"amber"|"red" = rate >= 20 ? "red" : rate >= 10 ? "amber" : "green"
-                    const dotClass = health==="green" ? "bg-green-500" : health==="amber" ? "bg-amber-500" : "bg-red-500"
-                    const plainTitle = "Does work get shipped?"
-                    const plainDesc = health==="green" ? "Almost all work ships" : health==="amber" ? "Some work never ships — watch" : "A lot of work is wasted"
+                    const health: "green" | "amber" | "red" = rate >= 20 ? "red" : rate >= 10 ? "amber" : "green"
+                    const dotClass = health === "green" ? "bg-green-500" : health === "amber" ? "bg-amber-500" : "bg-red-500"
+                    const badgeClass =
+                      health === "red"
+                        ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border-red-200 dark:border-red-800"
+                        : health === "amber"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800"
+                          : "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 border-green-200 dark:border-green-800"
+                    const label = health === "green" ? "Healthy" : health === "amber" ? "Watch" : "Action"
                     const oneIn = rate > 0 ? Math.round(100 / rate) : 0
-                    const bigNumber = rate > 0 ? `${rate.toFixed(1)}% wasted` : "No waste"
-                    const trendText = rate>0 ? `1 in ${oneIn} never ships · ${closed} of ${totalClosed} closed` : `${closed} closed without merge`
-                    const badgeClass = health==="red" ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border-red-200 dark:border-red-800' : health==="amber" ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800' : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 border-green-200 dark:border-green-800'
-                    const badgeText = rate > 0 ? `${rate.toFixed(1)}% — ${health==="red" ? "High waste" : health==="amber" ? "Watch" : "Healthy"}: 1 in ${oneIn} wasted` : `0% — Healthy`
                     return (
                       <>
                         <CardHeader className="pb-2">
                           <div className="flex items-center justify-between gap-2">
-                            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                              <span className={`inline-block size-2.5 rounded-full ${dotClass}`} aria-hidden />
-                              {plainTitle}
+                            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                              <span className={`size-2 rounded-full ${dotClass}`} aria-hidden />
+                              Shipped or wasted
                             </CardTitle>
-                            <Badge variant="secondary" className={`shrink-0 border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{health==="green" ? "Healthy" : health==="amber" ? "Watch" : "Action"}</Badge>
+                            <Badge variant="secondary" className={`shrink-0 border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>
+                              {label}
+                            </Badge>
                           </div>
-                          <CardDescription className="text-xs text-muted-foreground">{plainDesc}</CardDescription>
+                          <CardDescription className="truncate text-xs">
+                            {rate > 0 ? `${rate.toFixed(1)} percent wasted` : "Almost all work ships"}
+                          </CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-baseline justify-between gap-2">
-                            <div className="text-2xl font-semibold tabular-nums">{bigNumber}</div>
-                            <span className={`size-3 rounded-full ${dotClass}`} title={plainDesc} aria-label={health} />
+                            <div className="text-2xl font-semibold tabular-nums">{rate > 0 ? `${rate.toFixed(1)}% wasted` : "No waste"}</div>
+                            <span className={`size-3 rounded-full ${dotClass}`} aria-label={health} />
                           </div>
-                          <div className="text-[11px] text-muted-foreground">{trendText}</div>
-                          <div className="mt-1 text-[11px] text-muted-foreground">{badgeText}</div>
-                          {/* minimal donut collapsed without jargon label */}
-                          <ChartContainer config={{ "Merged (good)": { label: "Merged (good)", color: "var(--chart-2)" }, "Closed without merge (wasted)": { label: "Closed without merge (wasted)", color: "var(--chart-3)" }, "Still open": { label: "Still open", color: "var(--chart-5)" } }} className="mx-auto mt-2 aspect-square max-h-[160px]">
+                          <p className="truncate text-[11px] text-muted-foreground">
+                            {rate > 0 ? `1 in ${oneIn} never ships` : `${closed} closed without merge`} {totalClosed ? `· ${closed} of ${totalClosed} closed` : ""}
+                          </p>
+                          <ChartContainer
+                            config={{
+                              "Merged (good)": { label: "Merged (good)", color: "var(--chart-2)" },
+                              "Closed without merge (wasted)": { label: "Closed without merge (wasted)", color: "var(--chart-3)" },
+                              "Still open": { label: "Still open", color: "var(--chart-5)" },
+                            }}
+                            className="mx-auto mt-2 aspect-square max-h-[160px]"
+                          >
                             <PieChart>
-                              <Pie data={data.abandon?.segments ?? []} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={38} outerRadius={58} paddingAngle={2}>
-                                {(data.abandon?.segments ?? []).map((e:any)=> (<Cell key={e.label} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
+                              <Pie data={data.abandon?.segments ?? []} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={36} outerRadius={56} paddingAngle={2}>
+                                {(data.abandon?.segments ?? []).map((e: any) => (
+                                  <Cell key={e.label} fill={e.color} stroke="var(--background)" strokeWidth={1} />
+                                ))}
                               </Pie>
                               <ChartTooltip content={<AbandonTip />} />
                             </PieChart>
                           </ChartContainer>
-                          <button type="button" onClick={() => setAbandonExpanded((v) => !v)} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline" aria-expanded={abandonExpanded}>
-                            {abandonExpanded ? "Hide details" : "Learn →"}
-                          </button>
-                          {abandonExpanded ? (
-                            <div className="mt-3 rounded-md border bg-muted/30 p-3">
-                              <p className="text-xs font-medium text-foreground">Technical: Abandonment — abandoned rate</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Formula: abandonedRate = closed without merge ÷ (merged + closed) × 100 · {closed} closed of {totalClosed} closed ({rate.toFixed(1)}%)</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">Ideal thresholds: &lt;10% healthy, 10–20% watch, &gt;20% wasteful · {health==="red" ? "wasteful" : health==="amber" ? "watch" : "healthy"} · Technical band donut below</p>
-                              <p className="mt-1 text-[11px] text-muted-foreground">High waste means 1 in {oneIn} PRs never ship — review scope, draft hygiene, early feedback.</p>
-                              <ChartContainer config={{ "Merged (good)": { label: "Merged (good)", color: "var(--chart-2)" }, "Closed without merge (wasted)": { label: "Closed without merge (wasted)", color: "var(--chart-3)" }, "Still open": { label: "Still open", color: "var(--chart-5)" } }} className="mx-auto mt-2 aspect-square max-h-[180px]">
-                                <PieChart>
-                                  <Pie data={data.abandon?.segments ?? []} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={42} outerRadius={68} paddingAngle={2}>
-                                    {(data.abandon?.segments ?? []).map((e:any)=> (<Cell key={e.label} fill={e.color} stroke="var(--background)" strokeWidth={1} />))}
-                                  </Pie>
-                                  <ChartTooltip content={<AbandonTip />} />
-                                  <ChartLegend content={<ChartLegendContent nameKey="label" />} />
-                                </PieChart>
-                              </ChartContainer>
-                              <div className="mt-2 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
-                                <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-2)" }} aria-hidden />Merged (good)</span>
-                                <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-3)" }} aria-hidden />Closed without merge (wasted)</span>
-                                <span className="inline-flex items-center gap-1.5"><span className="size-2 shrink-0 rounded-[2px]" style={{ backgroundColor: "var(--chart-5)" }} aria-hidden />Still open</span>
-                              </div>
-                              <Link to="/pulls?state=closed" className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">View closed PRs →</Link>
+                          <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                            <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
+                            <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                              <p>Abandoned rate is closed without merge divided by merged plus closed.</p>
+                              <p>Healthy under 10 percent, watch 10 to 20, high waste over 20.</p>
+                              {data.abandon?.bySize ? (
+                                <div>
+                                  <p className="font-medium text-foreground">By size</p>
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {Object.entries(data.abandon.bySize as Record<string, number>).map(([k, v]) => (
+                                      <span key={k} className="rounded-full border border-border/50 px-2 py-0.5 text-[11px]">
+                                        {k} {v}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                              <Link to="/pulls?state=closed" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                                View closed PRs
+                              </Link>
                             </div>
-                          ) : null}
+                          </details>
                         </CardContent>
                       </>
                     )

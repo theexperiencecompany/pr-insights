@@ -193,7 +193,7 @@ function SemanticAreaTip({ active, payload, label }: Partial<import('recharts').
 
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <div className="text-sm font-semibold">{children}</div>
+  return <div className="text-base font-semibold">{children}</div>
 }
 
 // VISION v-hero — see docs/vision-hero.md
@@ -205,7 +205,7 @@ function HeroTiles({ data }: { data: OverviewData }) {
     return (
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Card key={i} className="rounded-[6px]">
+          <Card key={i} className="">
             <CardContent className="p-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">—</div>
               <div className="mt-1 text-xl font-semibold tabular-nums">—</div>
@@ -258,7 +258,7 @@ function HeroTiles({ data }: { data: OverviewData }) {
         {/* Cycle tile — p50/p90 + n + Δ vs trailing 90d */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Median cycle">
+            <Card className="cursor-default" role="region" aria-label="Median cycle">
               <CardContent className="flex flex-col gap-1 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cycle</span>
@@ -293,7 +293,7 @@ function HeroTiles({ data }: { data: OverviewData }) {
         {/* CI tile — success% 30d + median duration */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Card className="rounded-[6px] cursor-default" role="region" aria-label="CI success">
+            <Card className="cursor-default" role="region" aria-label="CI success">
               <CardContent className="flex flex-col gap-1 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">CI success</span>
@@ -314,7 +314,7 @@ function HeroTiles({ data }: { data: OverviewData }) {
         {/* Throughput tile — 28d vs 3-mo median */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Throughput">
+            <Card className="cursor-default" role="region" aria-label="Throughput">
               <CardContent className="flex flex-col gap-1 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Throughput</span>
@@ -334,7 +334,7 @@ function HeroTiles({ data }: { data: OverviewData }) {
         {/* Bus tile — top-3 share% + per-repo max + trend */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Bus share">
+            <Card className="cursor-default" role="region" aria-label="Bus share">
               <CardContent className="flex flex-col gap-1 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Bus share</span>
@@ -432,7 +432,7 @@ function VelocityCard({ v }: { v: OverviewData['velocity'][number] }) {
   }
 
   return (
-    <Card className="rounded-[6px]">
+    <Card className="">
       <CardContent className="p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium text-muted-foreground">{v.label}</span>
@@ -491,7 +491,7 @@ function AutomationCard({ data }: { data: OverviewData }) {
   const humanPct = total > 0 ? ((bot.humanMerged / total) * 100).toFixed(0) : '0'
   const botPct = total > 0 ? ((bot.botMerged / total) * 100).toFixed(0) : '0'
   return (
-    <Card className="rounded-[6px]">
+    <Card className="">
       <CardHeader className="pb-2">
         <SectionTitle>Automation</SectionTitle>
         <span className="text-xs text-muted-foreground">
@@ -552,7 +552,7 @@ function BusCard({ data }: { data: OverviewData }) {
         ? 'text-amber-600 dark:text-amber-400'
         : 'text-green-600 dark:text-green-400'
   return (
-    <Card className="rounded-[6px]">
+    <Card className="">
       <CardHeader className="pb-2">
         <SectionTitle>Bus factor</SectionTitle>
         <span className={"text-xs font-medium " + riskColor}>{riskLabel}</span>
@@ -603,7 +603,7 @@ function SemanticSection({ data, gran }: { data: OverviewData; gran: 'week' | 'm
   const pieData = useMemo(() => byType.map((s) => ({ name: s.type, value: s.count, percent: s.percent })), [byType])
   if (!hasData) return null
   return (
-    <Card className="rounded-[6px]">
+    <Card className="">
       <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
         <div>
           <SectionTitle>Semantic PR types</SectionTitle>
@@ -757,7 +757,7 @@ function WhenWeShip({ data }: { data: OverviewData }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card className="rounded-[6px]">
+      <Card className="">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <SectionTitle>Merges by weekday</SectionTitle>
           <div className="flex items-center gap-1 text-[11px]">
@@ -796,7 +796,7 @@ function WhenWeShip({ data }: { data: OverviewData }) {
           </ChartContainer>
         </CardContent>
       </Card>
-      <Card className="rounded-[6px]">
+      <Card className="">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <SectionTitle>Merges by hour</SectionTitle>
           <div className="flex items-center gap-1 text-[11px]">
@@ -957,15 +957,9 @@ function OverviewContent({
     <div className="flex flex-col gap-4">
       <HeroTiles data={data} />
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {data.velocity.map((v) => (
-          <VelocityCard key={v.label} v={v} />
-        ))}
-      </div>
-
-      <div className="rounded-lg rounded border bg-muted/30 p-3">
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-semibold">Shipping trends</div>
+          <div className="text-base font-semibold">Shipping trends</div>
           <div className="flex items-center gap-2">
             <Tabs value={gran} onValueChange={(v) => onGranChange(v as 'week' | 'month')}>
               <TabsList className="h-7">
@@ -1079,9 +1073,9 @@ function OverviewContent({
         </div>
       </div>
 
-      <WhenWeShip data={data} />
+      {/* WhenWeShip moved to Insights — Overview keeps Hero + Shipping + Heatmap only */}
 
-      <SemanticSection data={data} gran={gran} />
+      {/* Semantic PR types visible on Insights/People — Overview minimal */}
 
       {isWeek ? (
         <p className="text-[11px] text-muted-foreground">Weekly buckets start Monday · Jan 1 marked · brush to highlight heatmap weeks via ?from=&to={fromParam && toParam ? ` (${fromParam} → ${toParam})` : ''}</p>
@@ -1119,88 +1113,6 @@ function OverviewContent({
           </CardContent>
         </Card>
       ) : null}
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <AutomationCard data={data} />
-        <BusCard data={data} />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <SectionTitle>Top contributors</SectionTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-1.5">
-              {top.map((c) => (
-                <ContributorBar key={c.login} contributor={c} maxMerged={maxMerged} />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <SectionTitle>Largest pull requests</SectionTitle>
-            <Button
-              variant={hideReleases ? 'secondary' : 'outline'}
-              size="sm"
-              onClick={() => setHideReleases((h) => !h)}
-              aria-pressed={hideReleases}
-            >
-              {hideReleases ? 'Release PRs hidden' : 'Showing release PRs'}
-            </Button>
-          </CardHeader>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Pull request</TableHead>
-                <TableHead className="text-right">Additions</TableHead>
-                <TableHead className="text-right">Deletions</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Files</TableHead>
-                <TableHead className="text-right">Commits</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {largest.map(({ value, pull }) => (
-                <TableRow key={`${pull.repo}#${pull.number}`}>
-                  <TableCell className="max-w-[520px]">
-                    <span className="flex items-baseline gap-1.5">
-                      <a
-                        href={pull.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="truncate font-semibold text-foreground hover:text-blue-600 dark:hover:text-blue-400"
-                      >
-                        {pull.title}
-                      </a>
-                      <span className="shrink-0 text-muted-foreground">
-                        · {pull.repo}#{pull.number}
-                      </span>
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
-                    +{comma(pull.additions)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-red-600 tabular-nums dark:text-red-400">
-                    −{comma(pull.deletions)}
-                  </TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums">
-                    {comma(value)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {comma(pull.changedFiles)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {comma(pull.commits)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      </div>
     </div>
   )
 }
@@ -1225,7 +1137,7 @@ export default function OverviewPage() {
         <PageHeader title="Overview" description="Pull request activity across the organisation." />
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i} className="rounded-[6px]">
+            <Card key={i} className="">
               <CardContent className="flex flex-col gap-2 p-3">
                 <Skeleton className="h-3 w-16" />
                 <Skeleton className="h-5 w-12" />
@@ -1236,7 +1148,7 @@ export default function OverviewPage() {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i} className="rounded-[6px]">
+            <Card key={i} className="">
               <CardContent className="p-3">
                 <Skeleton className="h-4 w-24" />
                 <Skeleton className="mt-2 h-6 w-16" />
@@ -1250,14 +1162,10 @@ export default function OverviewPage() {
           <Skeleton className="h-7 w-36 rounded-md" />
         </div>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Skeleton className="h-[340px] w-full rounded-[6px]" />
-          <Skeleton className="h-[340px] w-full rounded-[6px]" />
+          <Skeleton className="h-[340px] w-full rounded-xl" />
+          <Skeleton className="h-[340px] w-full rounded-xl" />
         </div>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Skeleton className="h-36 w-full rounded-[6px]" />
-          <Skeleton className="h-36 w-full rounded-[6px]" />
-        </div>
-        <Skeleton className="h-[140px] w-full rounded-[6px]" />
+        <Skeleton className="h-[140px] w-full rounded-xl" />
       </div>
     )
   }

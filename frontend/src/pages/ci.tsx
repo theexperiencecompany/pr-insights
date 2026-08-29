@@ -312,13 +312,13 @@ export default function CIPage() {
       {isInitialLoading ? (
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (<Skeleton key={i} className="h-[84px] w-full rounded-[6px]" />))}
+            {Array.from({ length: 4 }).map((_, i) => (<Skeleton key={i} className="h-[84px] w-full rounded-xl" />))}
           </div>
           <div className="grid gap-4 lg:grid-cols-3">
-            <Skeleton className="h-[260px] w-full rounded-[6px]" />
-            <Skeleton className="h-[260px] w-full rounded-[6px] lg:col-span-2" />
+            <Skeleton className="h-[260px] w-full rounded-xl" />
+            <Skeleton className="h-[260px] w-full rounded-xl lg:col-span-2" />
           </div>
-          <Skeleton className="h-[360px] w-full rounded-[6px]" />
+          <Skeleton className="h-[360px] w-full rounded-xl" />
         </div>
       ) : error && !data ? (
         <EmptyState text={error} />
@@ -334,7 +334,7 @@ export default function CIPage() {
           <div className={cn(isReloading && 'pointer-events-none opacity-50 transition-opacity')}>
             {/* Top big numbers row */}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Card className={cn('rounded-[6px]', overall && (overall.p50 > 10 ? 'border-red-200 dark:border-red-900' : ''))}>
+              <Card className={cn(' overall && (overall.p50 > 10 ? 'border-red-200 dark:border-red-900' : ''))}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Median · p50</span>
@@ -354,7 +354,7 @@ export default function CIPage() {
                 </CardContent>
               </Card>
 
-              <Card className={cn('rounded-[6px]', overall && overall.p90 > 25 ? 'border-red-200 dark:border-red-900' : '')}>
+              <Card className={cn(' overall && overall.p90 > 25 ? 'border-red-200 dark:border-red-900' : '')}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Tail · p90</span>
@@ -372,7 +372,7 @@ export default function CIPage() {
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Total cost · cost per merge</span>
@@ -386,7 +386,7 @@ export default function CIPage() {
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Home vs GitHub</span>
@@ -412,9 +412,9 @@ export default function CIPage() {
 
             {/* Pie + Trend row */}
             <div className="mt-4 grid gap-4 lg:grid-cols-3">
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-semibold">Runner split</CardTitle>
+                  <CardTitle className="text-base font-semibold">Runner split</CardTitle>
                   <p className="text-xs text-muted-foreground">{data.split.homeRuns} home · {data.split.githubRuns} github {data.split.unknownRuns>0 ? `· ${data.split.unknownRuns} unknown` : ''} · {data.repo} · {period}</p>
                 </CardHeader>
                 <CardContent>
@@ -441,17 +441,17 @@ export default function CIPage() {
                         <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-[var(--chart-3)]" />github {data.split.githubPctRuns.toFixed(0)}% ({comma(data.split.githubRuns)})</span>
                         {data.split.unknownRuns>0 && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-[var(--chart-5)]" />unknown {((data.split.unknownRuns/data.split.totalRuns)*100).toFixed(0)}%</span>}
                       </div>
-                      <p className="mt-2 text-center text-[11px] text-muted-foreground">Inferred via workflow name substring allowlist (heuristic, no jobs API yet). Unknown = empty workflow.</p>
+                      <p className="mt-2 text-center text-[11px] text-muted-foreground">Since home hosting 2 days ago, historical home is estimated — inferred via workflow name substring allowlist (heuristic, no jobs API yet). Unknown = empty workflow.</p>
                     </>
                   )}
                 </CardContent>
               </Card>
 
-              <Card className="rounded-[6px] lg:col-span-2">
+              <Card className="lg:col-span-2">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="text-sm font-semibold">Stacked 100% area — github bottom · home top</CardTitle>
+                      <CardTitle className="text-base font-semibold">{gran === 'week' ? 'Weekly share of runs — home vs GitHub (since home hosting 2 days ago, historical home is estimated)' : 'Monthly share of runs — home vs GitHub (since home hosting 2 days ago, historical home is estimated)'}</CardTitle>
                       <p className="text-xs text-muted-foreground">{gran === 'week' ? 'Weekly' : 'Monthly'} share of runs · {data.trend.length} buckets · hover for counts</p>
                     </div>
                     <Badge variant="outline" className="text-[10px]">{gran}</Badge>
@@ -473,14 +473,14 @@ export default function CIPage() {
                       </AreaChart>
                     </ChartContainer>
                   )}
-                  <p className="mt-2 text-[11px] text-muted-foreground">100% stacked — share per {gran} bucket. GitHub at bottom, home on top. Unknown gray when &gt;0. Source: heuristic RunnerGroup per Run.</p>
+                  <p className="mt-2 text-[11px] text-muted-foreground">Since home hosting 2 days ago, historical home is estimated (heuristic via workflow name substring allowlist, no jobs API yet). Unknown gray when &gt;0. GitHub bottom, home middle, unknown top — 100% stacked.</p>
                 </CardContent>
               </Card>
             </div>
 
             {/* Release tile row - show time-to-release alongside CI if available */}
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardContent className="p-4">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Time-to-release</div>
                   <div className="mt-1 text-xl font-semibold tabular-nums">
@@ -491,7 +491,7 @@ export default function CIPage() {
                   <div className="mt-1 text-[11px] text-muted-foreground">PR CreatedAt → MergedAt for same period/repo filters. Fast CI + slow release → review bottleneck.</div>
                 </CardContent>
               </Card>
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardContent className="p-4">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Workflows</div>
                   <div className="mt-1 text-xl font-semibold tabular-nums">{data.workflows.length} <span className="text-sm font-normal text-muted-foreground">lanes</span></div>
@@ -502,7 +502,7 @@ export default function CIPage() {
                   </div>
                 </CardContent>
               </Card>
-              <Card className="rounded-[6px]">
+              <Card >
                 <CardContent className="p-4">
                   <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Budget insight</div>
                   <div className="mt-1 text-sm">
@@ -522,7 +522,7 @@ export default function CIPage() {
               const needs = (data as any).needsAttention as WorkflowHybrid[] | undefined
               const hasNeeds = Array.isArray(needs) && needs.length > 0
               return (
-                <Card className={hasNeeds ? "mt-4 rounded-[6px] border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/10" : "mt-4 rounded-[6px]"} role="region" aria-label="Workflows needing attention">
+                <Card className={hasNeeds ? "mt-4  border-amber-200 dark:border-amber-900 bg-amber-50/40 dark:bg-amber-950/10" : "mt-4 "} role="region" aria-label="Workflows needing attention">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -568,7 +568,7 @@ export default function CIPage() {
             {/* Per-workflow big-number strip (slow-first 6) */}
             <div className="mt-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Per-workflow lane health — big numbers, red if &gt; threshold</h2>
+                <h2 className="text-base font-semibold">Per-workflow lane health — big numbers, red if &gt; threshold</h2>
                 <span className="text-xs text-muted-foreground">{data.workflows.length} workflows · thresholds p50&gt;10m p90&gt;25m success&lt;85% · n&lt;10 dimmed</span>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -576,7 +576,7 @@ export default function CIPage() {
                   const red = wf.isSlow || wf.successRate < 85
                   const dim = wf.isSampleSmall
                   return (
-                    <Card key={wf.key} className={cn('rounded-[6px]', red ? 'border-red-200 dark:border-red-900' : '', dim && 'opacity-60')}>
+                    <Card key={wf.key} className={cn(' red ? 'border-red-200 dark:border-red-900' : '', dim && 'opacity-60')}>
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
@@ -618,7 +618,7 @@ export default function CIPage() {
             {/* Per-workflow table */}
             <div className="mt-6">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold">Lanes — detailed</h2>
+                <h2 className="text-base font-semibold">Lanes — detailed</h2>
                 <div className="flex items-center gap-2">
                   <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <input type="checkbox" checked={hideSmall} onChange={(e) => setHideSmall(e.target.checked)} className="size-3.5" />
@@ -632,7 +632,7 @@ export default function CIPage() {
                 </div>
               </div>
 
-              <Card className="mt-3 overflow-hidden rounded-[6px]">
+              <Card className="mt-3 overflow-hidden ">
                 <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>

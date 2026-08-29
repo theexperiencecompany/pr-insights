@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Vision metrics — shared helpers for Hero, DORA-lite, Flaky, Hybrid, Entire
+// Vision metrics shared helpers for Hero, DORA-lite, Flaky, Hybrid, Entire
 // See docs/vision-*.md for spec; this file implements minimal viable pure helpers.
 
 // ---- shared percentile / mean helpers ----
@@ -286,7 +286,7 @@ var tshirtDesc = map[TShirt]string{
 	TShirtM:   "feature",
 	TShirtL:   "large change",
 	TShirtXL:  "extra large",
-	TShirtXXL: "massive — split it",
+	TShirtXXL: "massive split it",
 }
 
 func TShirtFor(p Pull) TShirt {
@@ -979,6 +979,13 @@ var homeSubstrings = []string{
 	"hybrid", "home",
 }
 
+// homeCutoff is the product cut-over when the self-hosted runner (gaia-home)
+// went live. Before this date every Run is treated as github-hosted even if
+// the heuristic would classify the workflow as home — this avoids fake
+// stacked history that shows 50% home back to March when home didn't exist.
+// Product perspective: the experiment starts at cutoff, not at repo birth.
+var homeCutoff = time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+
 func InferRunnerGroup(workflow string) RunnerGroup {
 	if workflow == "" {
 		return RunnerUnknown
@@ -996,6 +1003,27 @@ func InferRunnerGroup(workflow string) RunnerGroup {
 }
 
 func RunnerGroupOf(r Run) RunnerGroup {
+	// Cutoff guard: before homeCutoff, treat everything as github (product cut-over)
+	t := r.RunStartedAt
+	if t.IsZero() {
+		t = r.CreatedAt
+	}
+	if !t.IsZero() && t.Before(homeCutoff) {
+		// Before product cutoff home didn't exist — force github for stacked history.
+		// Unknown workflow before cutoff is also github (no unknown slice in fake history).
+		if r.RunnerGroup == RunnerHome || r.RunnerGroup == RunnerUnknown {
+			return RunnerGithub
+		}
+		if r.RunnerGroup != "" {
+			// persisted github stays github
+			return RunnerGithub
+		}
+		// inferred path: empty workflow would be unknown, but before cutoff product says github
+		if r.Workflow == "" {
+			return RunnerGithub
+		}
+		return RunnerGithub
+	}
 	if r.RunnerGroup != "" {
 		return r.RunnerGroup
 	}
