@@ -313,8 +313,12 @@ func WeeklyStreaks(weekKeys []string) (current, longest int) {
 
 // BusFactor is the top-3 contributors' share of all merged PRs.
 type BusFactor struct {
-	Top3Share float64       `json:"top3Share"`
-	Top       []Contributor `json:"top"`
+	Top3Share      float64       `json:"top3Share"`
+	Top            []Contributor `json:"top"`
+	PerRepoMax     float64       `json:"perRepoMax,omitempty"`
+	PerRepoMaxRepo string        `json:"perRepoMaxRepo,omitempty"`
+	TrendPct       float64       `json:"trendPct,omitempty"`
+	PrevTop3Share  float64       `json:"prevTop3Share,omitempty"`
 }
 
 func BusFactorOf(contribs []Contributor, totalMerged int) BusFactor {

@@ -200,6 +200,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 // Replaces StatStrip 8-cell lifetime strip with 4-tile windowed hero (90d cycle/throughput/bus, 30d CI).
 function HeroTiles({ data }: { data: OverviewData }) {
   const hero = (data as any).hero as OverviewData['hero'] | undefined
+  const stats = (data as any).stats as OverviewData['stats'] | undefined
   if (!hero) {
     return (
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -218,100 +219,166 @@ function HeroTiles({ data }: { data: OverviewData }) {
   const cycle = hero.cycle
   const ci = hero.ci
   const thr = hero.throughput
-  const bus = hero.bus
+  const bus = hero.bus as any
   const cycleRisk = cycle.count === 0 ? 'empty' : cycle.count < 10 ? 'small' : cycle.p90 > 14 ? 'red' : cycle.p90 > 7 ? 'amber' : 'green'
   const ciRisk = ci.total === 0 ? 'empty' : ci.total < 20 ? 'small' : ci.rate >= 90 ? 'green' : ci.rate >= 80 ? 'amber' : 'red'
   const busRisk = bus.top3Share >= 70 ? 'High concentration' : bus.top3Share >= 50 ? 'Moderate' : 'Healthy'
   const busColor = bus.top3Share >= 70 ? 'text-red-600 dark:text-red-400' : bus.top3Share >= 50 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'
   const cycleColor = cycleRisk === 'red' ? 'text-red-600 dark:text-red-400' : cycleRisk === 'amber' ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'
   const ciColor = ciRisk === 'red' ? 'text-red-600 dark:text-red-400' : ciRisk === 'amber' ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'
+  // Cycle Δ vs trailing 90d
+  const cycleDeltaPct = (cycle as any).deltaPct as number | undefined
+  const cyclePrevCount = (cycle as any).prevCount as number | undefined
+  const cyclePrevP50 = (cycle as any).prevP50 as number | undefined
+  const hasCycleDelta = cyclePrevCount != null && cyclePrevCount > 0 && cycleDeltaPct != null && cycle.count > 0
+  const cycleDeltaLabel = hasCycleDelta ? `${cycleDeltaPct! >= 0 ? '+' : ''}${cycleDeltaPct!.toFixed(0)}% vs trailing 90d` : null
+  const cycleDeltaColor = hasCycleDelta ? (cycleDeltaPct! > 0 ? 'text-red-600 dark:text-red-400' : cycleDeltaPct! < 0 ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground') : 'text-muted-foreground'
+  // CI median duration
+  const ciMedianMin = (ci as any).medianDurationMin as number | undefined
+  // Throughput vs 3-mo median
+  const thrMedian = (thr as any).median3Mo as number | undefined
+  const thrMedianPerWeek = (thr as any).medianPerWeek as number | undefined
+  const thrDeltaVsMedian = (thr as any).deltaVsMedianPct as number | undefined
+  const hasThrMedian = thrMedian != null && thrMedian > 0
+  const thrVsMedianLabel = hasThrMedian && thr.merged > 0 ? `${thrDeltaVsMedian! >= 0 ? '+' : ''}${thrDeltaVsMedian!.toFixed(0)}% vs 3-mo median` : null
+  const thrVsMedianColor = hasThrMedian && thrDeltaVsMedian != null ? (thrDeltaVsMedian! > 0 ? 'text-green-600 dark:text-green-400' : thrDeltaVsMedian! < 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground') : 'text-muted-foreground'
   const thrDeltaLabel = thr.prevMerged === 0 && thr.merged > 0 ? 'New' : thr.prevMerged === 0 && thr.merged === 0 ? '—' : `${thr.deltaPct >= 0 ? '+' : ''}${thr.deltaPct.toFixed(0)}%`
-  const thrDeltaColor = thr.deltaPct > 0 ? 'text-green-600 dark:text-green-400' : thr.deltaPct < 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'
+  // Bus per-repo max + trend
+  const busPerRepoMax = (bus as any).perRepoMax as number | undefined
+  const busPerRepoMaxRepo = (bus as any).perRepoMaxRepo as string | undefined
+  const busTrendPct = (bus as any).trendPct as number | undefined
+  const busPrevShare = (bus as any).prevTop3Share as number | undefined
+  const hasBusTrend = busTrendPct != null && busPrevShare != null && busPrevShare > 0
+  const busTrendLabel = hasBusTrend ? `${busTrendPct! >= 0 ? '+' : ''}${busTrendPct!.toFixed(0)}pp vs trailing 90d` : null
+  const busTrendColor = hasBusTrend ? (busTrendPct! > 5 ? 'text-red-600 dark:text-red-400' : busTrendPct! < -5 ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground') : 'text-muted-foreground'
+
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      {/* Cycle tile */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Median cycle">
-            <CardContent className="flex flex-col gap-1 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cycle</span>
-                {cycle.count === 0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no data</Badge> : cycle.count < 10 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n={cycle.count} small</Badge> : cycleRisk === 'red' ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">p90&gt;14d</Badge> : cycleRisk === 'amber' ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/40">Watch</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge>}
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className={"text-xl font-semibold tabular-nums " + (cycle.count===0 ? 'text-muted-foreground' : cycleColor)}>{cycle.count===0 ? '—' : `${cycle.p50.toFixed(1)}d`}</span>
-                {cycle.count>0 ? <span className="text-xs text-muted-foreground">· p90 {cycle.p90.toFixed(1)}d</span> : null}
-              </div>
-              <div className="text-[11px] text-muted-foreground">{cycle.count===0 ? 'No merges in 90d' : `median · n=${cycle.count} · 90d`} {hero.windowNote ? <span className="rounded bg-muted px-1 py-0.5 text-[10px]">{hero.windowNote}</span> : null}</div>
-              {cycle.count>0 ? <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-[var(--chart-1)]" style={{ width: `${Math.min(100, (cycle.p50/7)*100)}%` }} /></div> : null}
-            </CardContent>
-          </Card>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[320px] text-xs leading-relaxed">
-          <div className="font-medium">Cycle p50 {cycle.p50.toFixed(1)}d · p90 {cycle.p90.toFixed(1)}d (n={cycle.count})</div>
-          <div>Median &amp; p90 days from CreatedAt → MergedAt in last 90d. Clamp negative to 0.</div>
-          <div className="text-[11px] opacity-70">Thresholds: p50 &lt;2d green, 2–4d amber, &gt;4d red · p90 &lt;7d green, 7–14d amber, &gt;14d red</div>
-        </TooltipContent>
-      </Tooltip>
-      {/* CI tile */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Card className="rounded-[6px] cursor-default" role="region" aria-label="CI success">
-            <CardContent className="flex flex-col gap-1 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">CI success</span>
-                {ci.total===0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no runs</Badge> : ci.total<20 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n&lt;20</Badge> : ci.rate>=90 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge> : ci.rate>=80 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700">Watch</Badge> : <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">Needs attention</Badge>}
-              </div>
-              <div className={"text-xl font-semibold tabular-nums " + (ci.total===0 ? 'text-muted-foreground' : ciColor)}>{ci.total===0 ? '—' : `${ci.rate.toFixed(0)}%`}</div>
-              <div className="text-[11px] text-muted-foreground">{ci.total===0 ? 'No CI runs in 30d' : `${ci.success} success · ${ci.failure} fail · 30d`}</div>
-              {ci.total>0 ? <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-2)]" style={{ width: `${ci.rate}%` }} /><div className="bg-[var(--chart-5)]" style={{ width: `${100-ci.rate}%` }} /></div> : null}
-            </CardContent>
-          </Card>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs"><div>Success / (success+failure) ×100 in last 30d. Excludes cancelled/skipped.</div></TooltipContent>
-      </Tooltip>
-      {/* Throughput tile */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Throughput">
-            <CardContent className="flex flex-col gap-1 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Throughput</span>
-                <span className={"flex items-center gap-1 text-xs font-semibold tabular-nums " + thrDeltaColor}>{thr.merged===0 ? '—' : thrDeltaLabel.includes('New') ? <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 px-1.5 py-0 text-[10px]">New</Badge> : <>{thr.deltaPct>0 ? <TrendingUp className="size-3.5" /> : thr.deltaPct<0 ? <TrendingDown className="size-3.5" /> : null}{thrDeltaLabel}</>}</span>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-xl font-semibold tabular-nums">{thr.merged===0 ? '—' : `${thr.perWeek.toFixed(1)}/wk`}</span>
-                {thr.merged>0 ? <span className="text-xs text-muted-foreground">· {thr.perDay.toFixed(1)}/day</span> : null}
-              </div>
-              <div className="text-[11px] text-muted-foreground">{thr.merged===0 ? 'No merges in 28d' : `${thr.merged} in 28d vs ${thr.prevMerged} prior`}</div>
-            </CardContent>
-          </Card>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs"><div>{thr.merged} merged in last 28d vs {thr.prevMerged} prior 28d.</div></TooltipContent>
-      </Tooltip>
-      {/* Bus tile */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Card className="rounded-[6px] cursor-default" role="region" aria-label="Bus share">
-            <CardContent className="flex flex-col gap-1 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Bus share</span>
-                <span className={"text-[10px] font-medium " + busColor}>{busRisk}</span>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className={"text-xl font-semibold tabular-nums " + busColor}>{bus.top3Share.toFixed(0)}%</span>
-                <span className="text-[11px] text-muted-foreground">of merges by top 3</span>
-              </div>
-              <div className="flex items-center gap-1">
-                {bus.top.slice(0,3).map((c:any)=>(<img key={c.login} src={avatarUrl(c.login)} alt={c.login} title={c.login} className="size-6 rounded-full ring-1 ring-border" loading="lazy" />))}
-                {bus.top.length===0 ? <span className="text-xs text-muted-foreground">No data</span> : null}
-              </div>
-              <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-1)]" style={{ width: `${bus.top3Share.toFixed(0)}%` }} /></div>
-            </CardContent>
-          </Card>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs"><div>Top 3 authors share of merges in 90d window. High &gt;70% concentration.</div></TooltipContent>
-      </Tooltip>
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {/* Cycle tile — p50/p90 + n + Δ vs trailing 90d */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Median cycle">
+              <CardContent className="flex flex-col gap-1 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Cycle</span>
+                  {cycle.count === 0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no data</Badge> : cycle.count < 10 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n={cycle.count} small</Badge> : cycleRisk === 'red' ? <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">p90&gt;14d</Badge> : cycleRisk === 'amber' ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/40">Watch</Badge> : <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge>}
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className={"text-xl font-semibold tabular-nums " + (cycle.count===0 ? 'text-muted-foreground' : cycleColor)}>{cycle.count===0 ? '—' : `${cycle.p50.toFixed(1)}d`}</span>
+                  {cycle.count>0 ? <span className="text-xs text-muted-foreground">· p90 {cycle.p90.toFixed(1)}d</span> : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">{cycle.count===0 ? 'No merges in 90d' : `median · n=${cycle.count} · 90d`} {hero.windowNote ? <span className="rounded bg-muted px-1 py-0.5 text-[10px]">{hero.windowNote}</span> : null}</div>
+                {hasCycleDelta ? (
+                  <div className={"flex items-center gap-1 text-[11px] font-medium tabular-nums " + cycleDeltaColor}>
+                    {cycleDeltaPct! > 0 ? <TrendingUp className="size-3" /> : cycleDeltaPct! < 0 ? <TrendingDown className="size-3" /> : null}
+                    {cycleDeltaLabel} {cyclePrevP50 != null ? <span className="text-[10px] text-muted-foreground">· prev p50 {cyclePrevP50.toFixed(1)}d</span> : null}
+                  </div>
+                ) : cycle.count>0 && cycle.count < 10 ? (
+                  <div className="text-[11px] text-muted-foreground">n small — Δ vs trailing 90d unavailable</div>
+                ) : cycle.count>0 ? (
+                  <div className="text-[11px] text-muted-foreground">Δ vs trailing 90d — no prior data</div>
+                ) : null}
+                {cycle.count>0 ? <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-[var(--chart-1)]" style={{ width: `${Math.min(100, (cycle.p50/7)*100)}%` }} /></div> : null}
+              </CardContent>
+            </Card>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-[360px] text-xs leading-relaxed">
+            <div className="font-medium">Cycle p50 {cycle.p50.toFixed(1)}d · p90 {cycle.p90.toFixed(1)}d (n={cycle.count})</div>
+            <div>Median &amp; p90 days from CreatedAt → MergedAt in last 90d. Clamp negative to 0.</div>
+            {hasCycleDelta ? <div>Δ vs trailing 90d: {cycleDeltaLabel} · trailing p50 {cyclePrevP50?.toFixed(1)}d (n={cyclePrevCount})</div> : <div>Δ vs trailing 90d: no prior window data</div>}
+            <div className="text-[11px] opacity-70">Thresholds: p50 &lt;2d green, 2–4d amber, &gt;4d red · p90 &lt;7d green, 7–14d amber, &gt;14d red</div>
+          </TooltipContent>
+        </Tooltip>
+        {/* CI tile — success% 30d + median duration */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Card className="rounded-[6px] cursor-default" role="region" aria-label="CI success">
+              <CardContent className="flex flex-col gap-1 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">CI success</span>
+                  {ci.total===0 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">no runs</Badge> : ci.total<20 ? <Badge variant="outline" className="px-1.5 py-0 text-[10px]">n&lt;20</Badge> : ci.rate>=90 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40">Healthy</Badge> : ci.rate>=80 ? <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700">Watch</Badge> : <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">Needs attention</Badge>}
+                </div>
+                <div className={"text-xl font-semibold tabular-nums " + (ci.total===0 ? 'text-muted-foreground' : ciColor)}>{ci.total===0 ? '—' : `${ci.rate.toFixed(0)}%`}</div>
+                <div className="text-[11px] text-muted-foreground">{ci.total===0 ? 'No CI runs in 30d' : `${ci.success} success · ${ci.failure} fail · 30d`}</div>
+                {ciMedianMin != null && ci.total>0 ? <div className="text-[11px] text-muted-foreground">median duration {ciMedianMin.toFixed(1)}m</div> : ci.total>0 ? <div className="text-[11px] text-muted-foreground">median duration —</div> : null}
+                {ci.total>0 ? <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-2)]" style={{ width: `${ci.rate}%` }} /><div className="bg-[var(--chart-5)]" style={{ width: `${100-ci.rate}%` }} /></div> : null}
+              </CardContent>
+            </Card>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-[320px] text-xs leading-relaxed">
+            <div>Success / (success+failure) ×100 in last 30d. Excludes cancelled/skipped.</div>
+            {ciMedianMin != null ? <div>Median duration {ciMedianMin.toFixed(1)} min across {ci.total} runs</div> : null}
+          </TooltipContent>
+        </Tooltip>
+        {/* Throughput tile — 28d vs 3-mo median */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Throughput">
+              <CardContent className="flex flex-col gap-1 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Throughput</span>
+                  <span className={"flex items-center gap-1 text-xs font-semibold tabular-nums " + (hasThrMedian ? thrVsMedianColor : thrDeltaLabel.includes('New') ? 'text-blue-600' : '')}>{thr.merged===0 ? '—' : hasThrMedian ? (<><span className={thrVsMedianColor}>{thrVsMedianLabel}</span></>) : thrDeltaLabel.includes('New') ? <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 px-1.5 py-0 text-[10px]">New</Badge> : <>{thr.deltaPct>0 ? <TrendingUp className="size-3.5" /> : thr.deltaPct<0 ? <TrendingDown className="size-3.5" /> : null}{thrDeltaLabel}</>}</span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-xl font-semibold tabular-nums">{thr.merged===0 ? '—' : `${thr.perWeek.toFixed(1)}/wk`}</span>
+                  {thr.merged>0 ? <span className="text-xs text-muted-foreground">· {thr.perDay.toFixed(1)}/day</span> : null}
+                </div>
+                <div className="text-[11px] text-muted-foreground">{thr.merged===0 ? 'No merges in 28d' : hasThrMedian ? `${thr.merged} in 28d vs ${thrMedian} median 3-mo · ${thrMedianPerWeek?.toFixed(1)}/wk median` : `${thr.merged} in 28d vs ${thr.prevMerged} prior`}</div>
+                {thr.merged>0 && !hasThrMedian ? <div className="text-[10px] text-muted-foreground">Δ vs prior 28d: {thrDeltaLabel}</div> : null}
+              </CardContent>
+            </Card>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-[320px] text-xs"><div>{thr.merged} merged in last 28d {hasThrMedian ? `vs ${thrMedian} median (3-mo) · median ${thrMedianPerWeek?.toFixed(1)}/wk` : `vs ${thr.prevMerged} prior 28d`}. 3-mo median is median of last three 28d windows.</div></TooltipContent>
+        </Tooltip>
+        {/* Bus tile — top-3 share% + per-repo max + trend */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Card className="rounded-[6px] cursor-default" role="region" aria-label="Bus share">
+              <CardContent className="flex flex-col gap-1 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Bus share</span>
+                  <span className={"text-[10px] font-medium " + busColor}>{busRisk}</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className={"text-xl font-semibold tabular-nums " + busColor}>{bus.top3Share.toFixed(0)}%</span>
+                  <span className="text-[11px] text-muted-foreground">of merges by top 3</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {bus.top.slice(0,3).map((c:any)=>(<img key={c.login} src={avatarUrl(c.login)} alt={c.login} title={c.login} className="size-6 rounded-full ring-1 ring-border" loading="lazy" />))}
+                  {bus.top.length===0 ? <span className="text-xs text-muted-foreground">No data</span> : null}
+                </div>
+                {busPerRepoMax != null && busPerRepoMax > 0 ? <div className="text-[11px] text-muted-foreground">per-repo max {busPerRepoMax.toFixed(0)}%{busPerRepoMaxRepo ? ` · ${busPerRepoMaxRepo}` : ''}</div> : null}
+                {hasBusTrend ? <div className={"flex items-center gap-1 text-[11px] font-medium tabular-nums " + busTrendColor}>{busTrendPct! > 0 ? <TrendingUp className="size-3" /> : busTrendPct! < 0 ? <TrendingDown className="size-3" /> : null}{busTrendLabel}</div> : bus.top3Share>0 ? <div className="text-[11px] text-muted-foreground">trend vs trailing 90d — no prior data</div> : null}
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted"><div className="bg-[var(--chart-1)]" style={{ width: `${bus.top3Share.toFixed(0)}%` }} /></div>
+              </CardContent>
+            </Card>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-[320px] text-xs leading-relaxed">
+            <div>Top 3 authors share of merges in 90d window. High &gt;70% concentration.</div>
+            {busPerRepoMax != null ? <div>Per-repo max {busPerRepoMax.toFixed(0)}%{busPerRepoMaxRepo ? ` in ${busPerRepoMaxRepo}` : ''}</div> : null}
+            {hasBusTrend ? <div>Trend {busTrendLabel} (prev {busPrevShare?.toFixed(0)}%)</div> : null}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      {/* Footer — lifetime totals in tooltip */}
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="text-[11px]">Hero windows: Cycle 90d + Δ vs trailing 90d · CI 30d · Throughput 28d vs 3-mo median · Bus 90d + per-repo max + trend</span>
+        {stats ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help underline decoration-dotted underline-offset-2">Lifetime totals</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-[360px] text-xs leading-relaxed">
+              <div className="font-medium">Lifetime totals (footer tooltip)</div>
+              <div>{comma(stats.total)} PRs · {comma(stats.merged)} merged · {comma(stats.open)} open · {comma(stats.closed)} closed</div>
+              <div>{comma(stats.additions)} ++ · {comma(stats.deletions)} -- · {comma(stats.files)} files · {comma(stats.commits)} commits</div>
+              <div>Contributors {comma(data.contributors)} · avg diff {comma(stats.avgDiff)} · avg files {comma(stats.avgFiles)}</div>
+              <div className="text-[11px] opacity-70">Lifetime counters kept for back-compat — hero shows windowed health.</div>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
     </div>
   )
 }

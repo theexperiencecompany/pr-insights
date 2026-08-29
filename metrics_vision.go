@@ -72,6 +72,10 @@ type CycleStats struct {
 	Mean       float64 `json:"mean,omitempty"`
 	Count      int     `json:"count"`
 	WindowDays int     `json:"windowDays"`
+	PrevP50    float64 `json:"prevP50,omitempty"`
+	PrevP90    float64 `json:"prevP90,omitempty"`
+	PrevCount  int     `json:"prevCount,omitempty"`
+	DeltaPct   float64 `json:"deltaPct,omitempty"`
 }
 
 func CycleStatsOf(pulls []Pull, since time.Time) CycleStats {
@@ -112,15 +116,17 @@ func LeadTimePercentiles(days []float64) (p50, p75, p90 float64) {
 }
 
 type CISuccess struct {
-	Success    int     `json:"success"`
-	Failure    int     `json:"failure"`
-	Total      int     `json:"total"`
-	Rate       float64 `json:"rate"`
-	WindowDays int     `json:"windowDays"`
+	Success           int     `json:"success"`
+	Failure           int     `json:"failure"`
+	Total             int     `json:"total"`
+	Rate              float64 `json:"rate"`
+	WindowDays        int     `json:"windowDays"`
+	MedianDurationMin float64 `json:"medianDurationMin,omitempty"`
 }
 
 func CISuccessOf(runs []Run, since time.Time) CISuccess {
 	cs := CISuccess{WindowDays: 30}
+	var durations []float64
 	for _, r := range runs {
 		t := r.RunStartedAt
 		if t.IsZero() {
@@ -139,22 +145,33 @@ func CISuccessOf(runs []Run, since time.Time) CISuccess {
 			cs.Failure++
 		default:
 			// skip cancelled/skipped/other
+			continue
+		}
+		if r.DurationSec > 0 {
+			durations = append(durations, float64(r.DurationSec)/60)
 		}
 	}
 	cs.Total = cs.Success + cs.Failure
 	if cs.Total > 0 {
 		cs.Rate = float64(cs.Success) / float64(cs.Total) * 100
 	}
+	if len(durations) > 0 {
+		sorted := sortedCopy(durations)
+		cs.MedianDurationMin = Percentile(sorted, 50)
+	}
 	return cs
 }
 
 type Throughput struct {
-	Merged     int     `json:"merged"`
-	PerWeek    float64 `json:"perWeek"`
-	PerDay     float64 `json:"perDay"`
-	WindowDays int     `json:"windowDays"`
-	PrevMerged int     `json:"prevMerged"`
-	DeltaPct   float64 `json:"deltaPct"`
+	Merged           int     `json:"merged"`
+	PerWeek          float64 `json:"perWeek"`
+	PerDay           float64 `json:"perDay"`
+	WindowDays       int     `json:"windowDays"`
+	PrevMerged       int     `json:"prevMerged"`
+	DeltaPct         float64 `json:"deltaPct"`
+	Median3Mo        int     `json:"median3Mo,omitempty"`
+	MedianPerWeek    float64 `json:"medianPerWeek,omitempty"`
+	DeltaVsMedianPct float64 `json:"deltaVsMedianPct"`
 }
 
 func ThroughputOf(pulls []Pull, now time.Time) Throughput {
@@ -179,6 +196,38 @@ func ThroughputOf(pulls []Pull, now time.Time) Throughput {
 	t.PerDay = float64(cur) / 28
 	if prev > 0 {
 		t.DeltaPct = float64(cur-prev) / float64(prev) * 100
+	}
+	// 3-mo median: median of last 3 windows of 28d each (84d)
+	var buckets []int
+	for i := 0; i < 3; i++ {
+		winEnd := now.AddDate(0, 0, -i*28)
+		winStart := now.AddDate(0, 0, -(i+1)*28)
+		c := 0
+		for _, p := range pulls {
+			if p.State != "MERGED" || p.MergedAt == nil {
+				continue
+			}
+			if p.MergedAt.After(winStart) && !p.MergedAt.After(winEnd) {
+				c++
+			}
+		}
+		buckets = append(buckets, c)
+	}
+	if len(buckets) > 0 {
+		// median of buckets (int counts)
+		tmp := make([]float64, len(buckets))
+		for i, v := range buckets {
+			tmp[i] = float64(v)
+		}
+		sorted := sortedCopy(tmp)
+		median := Percentile(sorted, 50)
+		t.Median3Mo = int(median + 0.5)
+		t.MedianPerWeek = median / 4
+		if median > 0 {
+			t.DeltaVsMedianPct = float64(cur-int(median)) / median * 100
+		} else if cur > 0 {
+			t.DeltaVsMedianPct = 0
+		}
 	}
 	return t
 }

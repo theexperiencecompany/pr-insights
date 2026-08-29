@@ -141,10 +141,11 @@ export interface Status {
 }
 
 // Vision Hero types (docs/vision-hero.md)
-export interface HeroCycle { p50: number; p90: number; p75?: number; mean?: number; count: number; windowDays: number }
-export interface HeroCI { success: number; failure: number; total: number; rate: number; windowDays: number }
-export interface HeroThroughput { merged: number; perWeek: number; perDay: number; windowDays: number; prevMerged: number; deltaPct: number }
-export interface Hero { cycle: HeroCycle; ci: HeroCI; throughput: HeroThroughput; bus: { top3Share: number; top: Contributor[] }; windowNote?: string }
+export interface HeroCycle { p50: number; p90: number; p75?: number; mean?: number; count: number; windowDays: number; prevP50?: number; prevP90?: number; prevCount?: number; deltaPct?: number }
+export interface HeroCI { success: number; failure: number; total: number; rate: number; windowDays: number; medianDurationMin?: number }
+export interface HeroThroughput { merged: number; perWeek: number; perDay: number; windowDays: number; prevMerged: number; deltaPct: number; median3Mo?: number; medianPerWeek?: number; deltaVsMedianPct?: number }
+export interface HeroBus { top3Share: number; top: Contributor[]; perRepoMax?: number; perRepoMaxRepo?: string; trendPct?: number; prevTop3Share?: number }
+export interface Hero { cycle: HeroCycle; ci: HeroCI; throughput: HeroThroughput; bus: HeroBus; windowNote?: string }
 
 export interface OverviewData {
   org: string
