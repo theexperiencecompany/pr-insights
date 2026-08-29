@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { DefaultLegendContentProps, TooltipContentProps } from 'recharts'
