@@ -120,7 +120,7 @@ function StackedAgentTip({ active, payload, label, hidden }: Partial<import('rec
           const key = String(entry.dataKey)
           const col = getPayloadColor(entry) ?? agentColor(key)
           return (
-            <TipRow key={key} color={col as string} label={agentLabel(key)} value={`${comma(Number(entry.value ?? 0))} cps`} />
+            <TipRow key={key} color={col as string} label={agentLabel(key)} value={`${comma(Number(entry.value ?? 0))} checkpoints`} />
           )
         })}
       {hasMultiple ? (
@@ -154,7 +154,7 @@ function ScatterTip({ active, payload }: Partial<import('recharts').TooltipConte
   const col = agentColor(agent) ?? 'var(--chart-1)'
   return (
     <TipShell label={repo}>
-      <TipRow color={col as string} label={agentLabel(agent)} value={`${comma(cps)} cps`} />
+      <TipRow color={col as string} label={agentLabel(agent)} value={`${comma(cps)} checkpoints`} />
       <TipRow color={col as string} label="Merged PRs" value={`${comma(prs)}`} />
       {typeof datum.cpPerPR === 'number' ? (
         <div className="text-[11px] text-muted-foreground">{datum.cpPerPR.toFixed(1)} cp/PR · bubble = checkpoints · 1 PR per 8 CP guide diagonal</div>
@@ -353,6 +353,29 @@ export default function EntirePage() {
     setSearchParams(next, { replace: true })
   }
 
+  // Keep the brush selection in sync with the URL window (brushMeta echoes
+  // the server's from/to) so the selection doesn't snap back to full range
+  // after each brushed refetch.
+  const brushIndices = useMemo(() => {
+    const meta = data?.brushMeta
+    if (!meta || (!meta.from && !meta.to) || allTimelineRows.length === 0) return undefined
+    let start = 0
+    let end = allTimelineRows.length - 1
+    if (meta.from) {
+      const i = allTimelineRows.findIndex((r) => String(r.rawDate) >= meta.from!)
+      start = i === -1 ? 0 : i
+    }
+    if (meta.to) {
+      let j = -1
+      for (let k = allTimelineRows.length - 1; k >= 0; k--) {
+        if (String(allTimelineRows[k].rawDate) < meta.to!) { j = k; break }
+      }
+      end = j === -1 ? allTimelineRows.length - 1 : j
+    }
+    if (start > end) return undefined
+    return { startIndex: start, endIndex: end }
+  }, [data?.brushMeta, allTimelineRows])
+
   // Scatter quadrant + diagonal analysis
   const scatterMeta = useMemo(() => {
     const pts: any[] = (data?.repoJoin ?? []) as any[]
@@ -387,10 +410,12 @@ export default function EntirePage() {
     // more precise busy definition per spec: busy lower-right = many cps few PRs => cp > median && pr < median
     // efficient upper-left = many PRs few cps => cp < median && pr > median
     // recount correctly
-    efficient = pts.filter((p) => p.checkpoints < medianCp && p.mergedCount > medianPr).length
-    busy = pts.filter((p) => p.checkpoints > medianCp && p.mergedCount < medianPr).length
+    // Strict partition on the medians: every repo lands in exactly one
+    // quadrant (points exactly on a median go high — no double counting).
+    efficient = pts.filter((p) => p.checkpoints < medianCp && p.mergedCount >= medianPr).length
+    busy = pts.filter((p) => p.checkpoints >= medianCp && p.mergedCount < medianPr).length
     highBoth = pts.filter((p) => p.checkpoints >= medianCp && p.mergedCount >= medianPr).length
-    lowBoth = pts.filter((p) => p.checkpoints <= medianCp && p.mergedCount <= medianPr).length
+    lowBoth = pts.filter((p) => p.checkpoints < medianCp && p.mergedCount < medianPr).length
     let emptyQuadrant: string | null = null
     let cta = ''
     if (efficient === 0) {
@@ -409,7 +434,8 @@ export default function EntirePage() {
     return { medianCp, medianPr, maxCp, maxPr, diagonalEnd, efficient, busy, highBoth, lowBoth, emptyQuadrant, cta }
   }, [data?.repoJoin])
 
-  // Repo table rows derived from repoJoin (already window-filtered server-side) or fallback to activity.repos
+  // Repo table rows derived from repoJoin: checkpoints are ALL-TIME per repo
+  // (entire activity has no window), PRs are window-filtered server-side.
   const repoTableRows = useMemo(() => {
     const join = (data?.repoJoin ?? []) as any[]
     if (join.length > 0) {
@@ -608,7 +634,7 @@ export default function EntirePage() {
                   </div>
                   <div>
                     <div className="text-base font-semibold tabular-nums">{(data.coach.throughput * 1000).toFixed(0)}</div>
-                    <div className="text-muted-foreground">throughput</div>
+                    <div className="text-muted-foreground" title="Coach-estimated tokens per checkpoint across your agents">tok/cp (coach)</div>
                   </div>
                   <div>
                     <div className="text-base font-semibold tabular-nums">{comma(data.coach.wastedEstTokens)}</div>
@@ -729,11 +755,11 @@ export default function EntirePage() {
                   )}
                 >
                   <span className="size-2 rounded-full" style={{ background: agentColor(pt.dominantAgent) }} />
-                  {pt.short} {pt.checkpoints}cps · {pt.mergedCount}PRs · {pt.cpPerPR.toFixed(1)} cp/PR
+                  {pt.short} {comma(pt.checkpoints)} cp · {pt.mergedCount} PRs · {pt.cpPerPR.toFixed(1)} cp/PR
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-center text-[11px] text-muted-foreground">All-time cps vs window PRs · efficient upper-left (few cps many PRs) · busy lower-right · diagonal = 1 PR per 8 checkpoints guide</p>
+            <p className="mt-1 text-center text-[11px] text-muted-foreground">All-time checkpoints vs merged PRs in the brushed window · efficient upper-left (few checkpoints, many PRs) · busy lower-right · diagonal = 1 PR per 8 checkpoints guide</p>
           </CardContent>
         </Card>
       ) : data?.repoJoin && data.repoJoin.length === 0 && (from || to) ? (
@@ -745,6 +771,7 @@ export default function EntirePage() {
       ) : null}
 
       {stats ? (
+        <>
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard label="Avg tokens / checkpoint" value={compact(Math.round(stats.throughput * 1000))} />
           <StatCard label="Current streak" value={`${stats.current_streak}d`} />
@@ -759,6 +786,8 @@ export default function EntirePage() {
           <StatCard label="Repos" value={comma(recap?.summary.repoCount ?? 0)} />
           <StatCard label="Tokens (6 mo)" value={compact(recap?.summary.me.tokens ?? 0)} />
         </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">Raw entire activity counters — streaks in days, continuity in hours. Definitions live in entire.io; iteration × is relative to that baseline.</p>
+        </>
       ) : null}
 
       {/* Unified timeline single Area/Bar Total vs By agent with brush */}
@@ -796,7 +825,7 @@ export default function EntirePage() {
                   <YAxis tickLine={false} axisLine={false} width={28} fontSize={11} allowDecimals={false} />
                   <ChartTooltip content={<CountTip />} />
                   <Area dataKey="total" name="Checkpoints" type="monotone" stroke="var(--chart-1)" fill="url(#fillTotal)" strokeWidth={1.5} />
-                  <Brush dataKey="date" height={24} stroke="var(--chart-1)" travellerWidth={10} onChange={handleBrushChange} />
+                  <Brush dataKey="date" height={24} stroke="var(--chart-1)" travellerWidth={10} onChange={handleBrushChange} startIndex={brushIndices?.startIndex} endIndex={brushIndices?.endIndex} />
                 </AreaChart>
               ) : (
                 <BarChart data={displayRows} syncId="entireTimeline" margin={{ left: 0, right: 8, top: 4, bottom: 24 }}>
@@ -808,7 +837,7 @@ export default function EntirePage() {
                   {activeAgents.map((id) => (
                     <Bar key={id} dataKey={id} stackId="cp" fill={agentColor(id)} hide={Boolean(hiddenAgents[id])} />
                   ))}
-                  <Brush dataKey="date" height={24} stroke="var(--chart-1)" travellerWidth={10} onChange={handleBrushChange} />
+                  <Brush dataKey="date" height={24} stroke="var(--chart-1)" travellerWidth={10} onChange={handleBrushChange} startIndex={brushIndices?.startIndex} endIndex={brushIndices?.endIndex} />
                 </BarChart>
               )}
             </ChartContainer>
@@ -1077,6 +1106,7 @@ export default function EntirePage() {
                   ? [
                       { key: 'shell', label: 'Shell', value: mix.shell },
                       { key: 'fileOps', label: 'File ops', value: mix.fileOps },
+                      { key: 'search', label: 'Search', value: mix.search },
                       { key: 'mcp', label: 'MCP', value: mix.mcp },
                       { key: 'agent', label: 'Agents', value: mix.agent },
                       { key: 'other', label: 'Other', value: mix.other },

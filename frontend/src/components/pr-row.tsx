@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { avatarUrl, type Pull } from '@/lib/api'
 import { comma, timeAgo } from '@/lib/format'
 import type { ReactNode } from 'react'
@@ -37,14 +38,12 @@ export function PrRow({ pull, extras }: { pull: Pull; extras?: ReactNode }) {
             className="size-4 rounded-full"
             loading="lazy"
           />
-          <a
-            href={`https://github.com/${pull.author}`}
-            target="_blank"
-            rel="noreferrer"
+          <Link
+            to={`/people/${pull.author}`}
             className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
           >
             {pull.author}
-          </a>
+          </Link>
           <span>·</span>
           <span>{relative}</span>
           <span>·</span>

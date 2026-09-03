@@ -1,12 +1,9 @@
-// @ts-nocheck
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { DefaultLegendContentProps, TooltipContentProps } from 'recharts'
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   Brush,
   CartesianGrid,
   Cell,
@@ -14,21 +11,19 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ReferenceArea,
   ReferenceLine,
   XAxis,
   YAxis,
 } from 'recharts'
-import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, Loader2, XCircle } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 import { EmptyState } from '@/components/empty-state'
 import { FilterBar } from '@/components/filter-bar'
 import { PageHeader } from '@/components/page-header'
-import { StatCard } from '@/components/stat-card'
-import { getInsights, getStatus, getWorkflowRuns, type WorkflowRun, type WorkflowStat } from '@/lib/api'
+import { getInsights, getOverview, type OverviewData } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { comma, compact, fmtDuration, formatDate } from '@/lib/format'
+import { comma, compact } from '@/lib/format'
 import { useApi } from '@/lib/use-api'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +32,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   ChartContainer,
   ChartLegend,
-  ChartLegendContent,
   ChartTooltip,
   type ChartConfig,
 } from '@/components/ui/chart'
@@ -91,14 +85,6 @@ const mergedConfig = {
 
 const FORECAST_STORAGE_KEY = 'pr-insights-show-forecast'
 
-const ciConfig = {
-  success: { label: 'Success', color: 'var(--chart-2)' },
-  failure: { label: 'Failure', color: 'var(--chart-3)' },
-  other: { label: 'Cancelled & other', color: 'var(--chart-5)' },
-  rate: { label: 'Success rate', color: 'var(--chart-2)' },
-  duration: { label: 'Median duration', color: 'var(--chart-1)' },
-} satisfies ChartConfig
-
 function Filter({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -113,11 +99,11 @@ function Filter({ label, children }: { label: string; children: ReactNode }) {
 // Series metadata for the shipping charts: key → label + value formatter + dashed styling.
 const SHIP_SERIES: Record<string, { label: string; format: (v: number) => string; dashed?: boolean; description?: string }> = {
   merged: { label: 'Merged', format: (v) => `${comma(Math.round(v))} PRs` },
-  ma: { label: 'Moving average', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Moving average (trailing 5wk/3mo)' },
+  ma: { label: 'Moving average', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Trailing moving average (prior 5wk/3mo, excludes current bucket)' },
   forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Forecast linear extrap +1..+3 — not a prediction' },
   prev: { label: 'Last year', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Last year' },
   lines: { label: 'Lines', format: (v) => `${comma(Math.round(v))} lines` },
-  cycle: { label: 'Median', format: (v) => `${v.toFixed(1)} days` },
+  cycle: { label: 'Bucket median', format: (v) => `${v.toFixed(1)} days`, description: 'Median cycle of this bucket only — dashed line is the median across buckets' },
   total: { label: 'Total lines', format: (v) => `${comma(Math.round(v))} lines` },
   p75: { label: 'p75', format: (v) => `${v.toFixed(1)} days`, dashed: true, description: 'p75 cycle time' },
   p90: { label: 'p90', format: (v) => `${v.toFixed(1)} days`, dashed: true, description: 'p90 cycle time' },
@@ -189,31 +175,6 @@ function SeriesTip({ active, payload, label }: Partial<TooltipContentProps<numbe
   )
 }
 
-function RateTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
-  if (!active || !payload?.length) return null
-  const v = Number(payload[0]?.value ?? 0)
-  if (!Number.isFinite(v)) return null
-  const col = getPayloadColor(payload[0]) ?? "var(--chart-2)"
-  return (
-    <TipShell label={label}>
-      <TipRow color={col} label="Success rate" value={`${v.toFixed(1)}%`} />
-      {v < 90 ? <div className="text-[11px] text-amber-600 dark:text-amber-400">Below SLO 90% — dashed threshold</div> : null}
-    </TipShell>
-  )
-}
-
-function DurationTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
-  if (!active || !payload?.length) return null
-  const minutes = Number(payload[0]?.value ?? 0)
-  if (!Number.isFinite(minutes)) return null
-  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
-  return (
-    <TipShell label={label}>
-      <TipRow color={col} label="Median duration" value={fmtDuration(minutes)} />
-    </TipShell>
-  )
-}
-
 function CumulativeTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
   if (!active || !payload?.length) return null
   const v = Number(payload[0]?.value ?? 0)
@@ -222,18 +183,6 @@ function CumulativeTip({ active, payload, label }: Partial<TooltipContentProps<n
   return (
     <TipShell label={label}>
       <TipRow color={col} label="Total lines" value={`${comma(Math.round(v))} lines`} />
-    </TipShell>
-  )
-}
-
-function MinutesTip({ active, payload, label }: Partial<TooltipContentProps<number, string>>) {
-  if (!active || !payload?.length) return null
-  const v = Number(payload[0]?.value ?? 0)
-  if (!Number.isFinite(v)) return null
-  const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
-  return (
-    <TipShell label={label}>
-      <TipRow color={col} label="Minutes" value={`${comma(Math.round(v))} min`} />
     </TipShell>
   )
 }
@@ -268,7 +217,7 @@ function LeadTimeTip({ active, payload, label }: Partial<TooltipContentProps<num
       {rows.map((entry) => {
         const key = String(entry.dataKey)
         const isDashed = key === "p90" || key === "p75"
-        const col = getPayloadColor(entry) ?? (key === "p90" ? "var(--chart-5)" : "var(--chart-1)")
+        const col = getPayloadColor(entry) ?? (key === "p90" ? "var(--chart-5)" : key === "p75" ? "var(--chart-2)" : "var(--chart-1)")
         const labelMap: Record<string, string> = { p50: "p50", p90: "p90", p75: "p75" }
         return (
           <TipRow key={key} color={col as string} label={labelMap[key] ?? key} value={`${Number(entry.value).toFixed(1)}d`} dashed={isDashed} />
@@ -290,7 +239,7 @@ function WipTip({ active, payload, label }: Partial<TooltipContentProps<number, 
   const col = getPayloadColor(payload[0]) ?? "var(--chart-1)"
   return (
     <TipShell label={label}>
-      <TipRow color={col as string} label="WIP" value={`${v.toFixed(1)} PRs`} />
+      <TipRow color={col as string} label="Avg open" value={`${v.toFixed(1)} PRs`} />
     </TipShell>
   )
 }
@@ -302,39 +251,10 @@ function AbandonTip({ active, payload }: Partial<TooltipContentProps<number, str
   const col = (getPayloadColor(entry) ?? datum.color ?? "var(--chart-3)") as string
   const name = String(entry.name ?? datum.label ?? "Segment")
   const count = Number(entry.value ?? 0)
+  const pct = typeof datum.pct === "number" ? ` · ${datum.pct.toFixed(1)}% of all` : ""
   return (
     <TipShell>
-      <TipRow color={col} label={name} value={`${comma(count)}`} />
-    </TipShell>
-  )
-}
-
-
-
-function CiTip({
-  active,
-  payload,
-  label,
-  hidden,
-}: Partial<TooltipContentProps<number, string>> & { hidden?: Record<string, boolean> }) {
-  if (!active || !payload?.length) return null
-  const rows = payload.filter((entry) => !hidden?.[String(entry.dataKey)])
-  if (!rows.length) return null
-  const total = rows.reduce((sum, entry) => sum + Number(entry.value ?? 0), 0)
-  return (
-    <TipShell label={label}>
-      {rows.map((entry) => (
-        <TipRow
-          key={String(entry.dataKey)}
-          color={getPayloadColor(entry) ?? (entry.color as string)}
-          label={String(entry.name ?? entry.dataKey)}
-          value={comma(Number(entry.value ?? 0))}
-        />
-      ))}
-      <div className="flex items-center justify-between gap-4 border-t border-border/50 pt-1.5">
-        <span className="text-muted-foreground">Total</span>
-        <span className="font-mono font-medium tabular-nums">{comma(total)}</span>
-      </div>
+      <TipRow color={col} label={name} value={`${comma(count)}${pct}`} />
     </TipShell>
   )
 }
@@ -391,50 +311,8 @@ function ToggleLegend({
   )
 }
 
-function ConclusionIcon({ conclusion }: { conclusion: string }) {
-  if (conclusion === 'success') {
-    return <CheckCircle2 className="size-4 shrink-0 text-chart-2" />
-  }
-  if (conclusion === 'failure') {
-    return <XCircle className="size-4 shrink-0 text-chart-3" />
-  }
-  return <CircleDashed className="size-4 shrink-0 text-chart-5" />
-}
-
 function SectionHeading({ children }: { children: ReactNode }) {
   return <h2 className="mt-6 text-base font-semibold">{children}</h2>
-}
-
-// SortableHead is a click-to-sort table header with an arrow indicator.
-function SortableHead({
-  label,
-  k,
-  sort,
-  onSort,
-  className,
-}: {
-  label: string
-  k: string
-  sort: { key: string; dir: 'asc' | 'desc' }
-  onSort: (key: string) => void
-  className?: string
-}) {
-  const active = sort.key === k
-  return (
-    <TableHead className={className}>
-      <button
-        type="button"
-        onClick={() => onSort(k)}
-        className={cn(
-          'inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground',
-          active && 'text-foreground',
-        )}
-      >
-        {label}
-        {active ? (sort.dir === 'desc' ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />) : null}
-      </button>
-    </TableHead>
-  )
 }
 
 function ChartCard({
@@ -456,6 +334,156 @@ function ChartCard({
   )
 }
 
+// Primer palette for conventional-commit types (deuteranopia-safe order kept
+// in the legend by sorting on count, not hue adjacency).
+const SEM_COLORS: Record<string, string> = {
+  feat: '#0969da',
+  fix: '#cf222e',
+  chore: '#8250df',
+  docs: '#0a3069',
+  style: '#1a7f37',
+  refactor: '#bf8700',
+  perf: '#9a6700',
+  test: '#0550ae',
+  build: '#6639ba',
+  ci: '#6e7781',
+  revert: '#82071e',
+  other: '#656d76',
+}
+
+function SemanticTip({ active, payload }: Partial<TooltipContentProps<number, string>>) {
+  if (!active || !payload?.length) return null
+  const entry = payload[0]
+  if (!entry?.value) return null
+  const datum = (entry.payload as any) ?? {}
+  const col = (getPayloadColor(entry) ?? datum.fill ?? '#0969da') as string
+  const pct = typeof datum.percent === 'number' ? ` · ${datum.percent.toFixed(1)}%` : ''
+  return (
+    <TipShell>
+      <TipRow color={col} label={String(entry.name ?? datum.type ?? 'Type')} value={`${comma(Number(entry.value))} PRs${pct}`} />
+    </TipShell>
+  )
+}
+
+// What we ship: semantic PR types + human/bot split + velocity deltas.
+// Org-wide lifetime counters (not repo/period-filtered) — the caption says so.
+function WhatWeShip({ overview }: { overview: OverviewData | undefined | null }) {
+  const byType = overview?.semantic?.byType ?? []
+  const total = byType.reduce((s, b) => s + b.count, 0)
+  const pieData = [...byType].sort((a, b) => b.count - a.count).map((s) => ({ name: s.type, value: s.count, percent: s.percent }))
+  const bot = overview?.bot
+  const botTotal = (bot?.humanMerged ?? 0) + (bot?.botMerged ?? 0)
+  const humanPct = botTotal > 0 ? ((bot?.humanMerged ?? 0) / botTotal) * 100 : 0
+  const velocity = overview?.velocity ?? []
+  if (!overview || (byType.length === 0 && !bot && velocity.length === 0)) return null
+  return (
+    <div className="mt-6">
+      <SectionHeading>What we ship</SectionHeading>
+      <p className="mt-1 text-xs text-muted-foreground">Org-wide lifetime mix — ignores the repo and period filters above.</p>
+      <div className="mt-3 grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">PR types</CardTitle>
+            <CardDescription className="text-xs">Conventional-commit prefix · {comma(total)} PRs</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {pieData.length > 0 ? (
+              <>
+                <ChartContainer config={{}} className="mx-auto aspect-square max-h-[200px]">
+                  <PieChart>
+                    <ChartTooltip content={<SemanticTip />} />
+                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={76} paddingAngle={1}>
+                      {pieData.map((entry) => (
+                        <Cell key={entry.name} fill={SEM_COLORS[entry.name] ?? '#656d76'} stroke="var(--background)" strokeWidth={1} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ChartContainer>
+                <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+                  {pieData.slice(0, 8).map((s) => (
+                    <span key={s.name} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium">
+                      <span className="inline-block size-2 rounded-full" style={{ background: SEM_COLORS[s.name] ?? '#656d76' }} />
+                      {s.name} {s.percent.toFixed(0)}%
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">No typed PRs.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">Humans vs bots</CardTitle>
+            <CardDescription className="text-xs">{comma(botTotal)} merged</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-semibold tabular-nums">{humanPct.toFixed(0)}%</span>
+              <span className="text-xs text-muted-foreground">human</span>
+            </div>
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+              <div className="bg-[var(--chart-2)]" style={{ width: `${humanPct}%` }} />
+              <div className="bg-[var(--chart-5)]" style={{ width: `${100 - humanPct}%` }} />
+            </div>
+            <div className="flex justify-between text-xs tabular-nums text-muted-foreground">
+              <span>{comma(bot?.humanMerged ?? 0)} human</span>
+              <span>{comma(bot?.botMerged ?? 0)} bots</span>
+            </div>
+            {(bot?.bots.length ?? 0) > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {(bot?.bots ?? []).slice(0, 6).map((b) => (
+                  <Badge key={b} variant="secondary" className="px-1.5 py-0 text-[11px] font-medium">
+                    {b}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No bot merges.</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold">Velocity</CardTitle>
+            <CardDescription className="text-xs">Merged vs prior period</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {velocity.length > 0 ? (
+              velocity.slice(0, 3).map((v) => {
+                const isNew = v.previous === 0 && v.current > 0
+                const up = v.deltaPct > 0
+                const down = v.deltaPct < 0
+                return (
+                  <div key={v.label} className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-muted-foreground">{v.label}</span>
+                    <span className="flex items-center gap-2 text-sm font-semibold tabular-nums">
+                      {comma(v.current)}
+                      {isNew ? (
+                        <Badge variant="secondary" className="bg-blue-100 px-1.5 py-0 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">New</Badge>
+                      ) : up ? (
+                        <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{v.deltaPct.toFixed(0)}%</span>
+                      ) : down ? (
+                        <span className="text-xs font-semibold text-red-600 dark:text-red-400">{v.deltaPct.toFixed(0)}%</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </span>
+                  </div>
+                )
+              })
+            ) : (
+              <p className="text-xs text-muted-foreground">No velocity data.</p>
+            )}
+            <p className="text-[11px] text-muted-foreground">Current vs previous window · New means no merges in the prior window.</p>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
 export default function InsightsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -466,9 +494,11 @@ export default function InsightsPage() {
   const repoParam = searchParams.get('repo') ?? 'all'
 
   const { data, loading, error } = useApi(() => getInsights({ repo: repoParam === 'all' ? undefined : repoParam, period, gran }), [repoParam, period, gran])
+  // Org-wide context (semantic types, bots, velocity): the insights payload is
+  // repo/period-filtered, these lifetime counters are not — always labeled so.
+  const { data: overview } = useApi(() => getOverview({ largest: 5, gran }), [gran])
   const isInitialLoading = loading && !data
   const isReloading = loading && !!data
-  const { data: status } = useApi(getStatus)
 
   const [hidden, setHidden] = useState<Record<string, boolean>>({})
   const [showForecast, setShowForecast] = useState<boolean>(() => {
@@ -584,22 +614,6 @@ export default function InsightsPage() {
     return { longest, current: trailing, label }
   }, [data])
 
-  const ciMedianRate = useMemo(() => {
-    if (!data?.ci?.length) return 0
-    const vals = data.ci.filter((b) => b.total > 0).map((b) => b.successRate).filter((v) => Number.isFinite(v)).sort((a, b) => a - b)
-    if (!vals.length) return 0
-    const mid = Math.floor(vals.length / 2)
-    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
-  }, [data])
-
-  const ciMedianDuration = useMemo(() => {
-    if (!data?.ci?.length) return 0
-    const vals = data.ci.map((b) => b.medianDurationMin).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b)
-    if (!vals.length) return 0
-    const mid = Math.floor(vals.length / 2)
-    return vals.length % 2 === 1 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
-  }, [data])
-
   const cycleMedian = useMemo(() => {
     if (!data?.ship?.length) return 0
     const vals = data.ship.map((b) => b.cycleMedianDays).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b)
@@ -625,9 +639,11 @@ export default function InsightsPage() {
     if (!data) return []
     const window = gran === 'week' ? 5 : 3
     const rows: { label: string; merged: number | null; ma: number | null; prev: number | null; forecast: number | null }[] = data.ship.map((b, i) => {
-      const lo = Math.max(0, i - window + 1)
-      const slice = data.ship.slice(lo, i + 1)
-      const ma = slice.reduce((s, x) => s + x.merged, 0) / slice.length
+      // Trailing average over the previous `window` buckets only — the current
+      // bucket is excluded so "% vs moving avg" never compares a point to itself.
+      const lo = Math.max(0, i - window)
+      const slice = data.ship.slice(lo, i)
+      const ma = slice.length ? slice.reduce((s, x) => s + x.merged, 0) / slice.length : null
       return { label: b.label, merged: b.merged, ma: ma, prev: null, forecast: null }
     })
     if ((data.shipPrev ?? []).length === data.ship.length) {
@@ -673,160 +689,7 @@ export default function InsightsPage() {
     [data],
   )
 
-  const ciMinutesData = useMemo(
-    () => data?.ci.map((b) => ({ label: b.label, minutes: b.totalMinutes })) ?? [],
-    [data],
-  )
-
-  const [showAllWorkflows, setShowAllWorkflows] = useState(false)
-  const [wfSort, setWfSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({
-    key: 'runs',
-    dir: 'desc',
-  })
-
-  // Workflow hide preferences: URL ?hide=&hideOneOffs=0 is source of truth, localStorage fallback.
-  // Default is show-all (honest) — hidden prefs dim rows and show banner "X workflows hidden — may hide failures".
-  const PREFS_KEY = 'pr-insights-workflow-prefs'
-  const DEFAULT_HIDDEN = ['Claude Code', 'Claude Code Review', 'Code Quality']
-  void DEFAULT_HIDDEN
-  const parseHideParam = (val: string | null): string[] | null => {
-    if (val === null) return null
-    if (val === '') return []
-    return val
-      .split(',')
-      .map((s) => {
-        try {
-          return decodeURIComponent(s.trim())
-        } catch {
-          return s.trim()
-        }
-      })
-      .filter(Boolean)
-  }
-  const parseHideOneOffsParam = (val: string | null): boolean | null => {
-    if (val === null) return null
-    return val === '1' || val.toLowerCase() === 'true'
-  }
-  const [wfPrefs, setWfPrefs] = useState<{ hidden: string[]; hideOneOffs: boolean }>(() => {
-    const hideFromUrl = parseHideParam(searchParams.get('hide'))
-    const hideOneOffsFromUrl = parseHideOneOffsParam(searchParams.get('hideOneOffs'))
-    if (hideFromUrl !== null || hideOneOffsFromUrl !== null) {
-      return {
-        hidden: hideFromUrl ?? [],
-        hideOneOffs: hideOneOffsFromUrl ?? false,
-      }
-    }
-    try {
-      const raw = localStorage.getItem(PREFS_KEY)
-      if (raw) {
-        const p = JSON.parse(raw) as { hidden?: unknown; hideOneOffs?: unknown }
-        return {
-          hidden: Array.isArray(p.hidden) ? p.hidden.filter((x): x is string => typeof x === 'string') : [],
-          hideOneOffs: p.hideOneOffs === true || p.hideOneOffs === 'true' || p.hideOneOffs === 1,
-        }
-      }
-    } catch {
-      // ignore malformed prefs
-    }
-    return { hidden: [], hideOneOffs: false }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(wfPrefs))
-    } catch {
-      // storage unavailable — prefs just don't persist
-    }
-    const next = new URLSearchParams(searchParams)
-    if (wfPrefs.hidden.length > 0) next.set('hide', wfPrefs.hidden.map(encodeURIComponent).join(','))
-    else next.set('hide', '')
-    next.set('hideOneOffs', wfPrefs.hideOneOffs ? '1' : '0')
-    const curHide = searchParams.get('hide')
-    const curOneOff = searchParams.get('hideOneOffs')
-    if (curHide !== next.get('hide') || curOneOff !== next.get('hideOneOffs')) {
-      setSearchParams(next, { replace: true })
-    }
-  }, [wfPrefs, searchParams, setSearchParams])
-
-  // Expandable per-workflow run drill-down.
-  const [expandedWf, setExpandedWf] = useState<string | null>(null)
-  const [wfRuns, setWfRuns] = useState<Record<string, WorkflowRun[]>>({})
-  const [runsLoading, setRunsLoading] = useState<string | null>(null)
-  // disclosure via details
-  const toggleExpand = async (key: string, repo: string, workflow: string) => {
-    if (expandedWf === key) {
-      setExpandedWf(null)
-      return
-    }
-    setExpandedWf(key)
-    if (!wfRuns[key]) {
-      setRunsLoading(key)
-      try {
-        const runs = await getWorkflowRuns({ workflow, repo, limit: 12 })
-        setWfRuns((m) => ({ ...m, [key]: runs }))
-      } catch {
-        // leave empty — the row shows "no runs"
-      } finally {
-        setRunsLoading(null)
-      }
-    }
-  }
-
-  const toggleHidden = (wf: WorkflowStat) => {
-    const key = `${wf.repo}/${wf.workflow}`
-    setWfPrefs((p) => {
-      const currently = p.hidden.includes(key) || p.hidden.includes(wf.workflow)
-      // Normalise to the repo-qualified key so defaults can be un-hidden.
-      const hidden = p.hidden.filter((k) => k !== key && k !== wf.workflow)
-      return { ...p, hidden: currently ? hidden : [...hidden, key] }
-    })
-  }
-
-  const handleWfSort = (key: string) => {
-    setWfSort((s) => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }))
-  }
-
-  const sortedWorkflows = useMemo(() => {
-    const rows = [...(data?.workflows ?? [])]
-    const dir = wfSort.dir === 'asc' ? 1 : -1
-    rows.sort((a, b) => {
-      switch (wfSort.key) {
-        case 'workflow':
-          return dir * a.workflow.localeCompare(b.workflow)
-        case 'successRate':
-          return dir * (a.successRate - b.successRate)
-        case 'median':
-          return dir * (a.medianDurationMin - b.medianDurationMin)
-        case 'longest':
-          return dir * (a.longestDurationMin - b.longestDurationMin)
-        case 'lastRun':
-          return dir * (a.lastRunAt ?? '').localeCompare(b.lastRunAt ?? '')
-        default:
-          return dir * (a.runs - b.runs)
-      }
-    })
-    return rows
-  }, [data, wfSort])
-
-  const isWorkflowHidden = (wf: WorkflowStat) =>
-    wfPrefs.hidden.includes(`${wf.repo}/${wf.workflow}`) || wfPrefs.hidden.includes(wf.workflow)
-  const isOneOffHidden = (wf: WorkflowStat) => wfPrefs.hideOneOffs && wf.runs <= 1
-
-  const hiddenWorkflows = useMemo(
-    () => sortedWorkflows.filter(isWorkflowHidden),
-    [sortedWorkflows, wfPrefs],
-  )
-  const hiddenCount = wfPrefs.hidden.length
-  // oneOffCount kept for potential banner augmentation
-  const oneOffCount = useMemo(() => sortedWorkflows.filter((wf) => wf.runs <= 1).length, [sortedWorkflows])
-  void oneOffCount
-
-  // Default show-all: all workflows are shown, hidden/one-off are dimmed not removed (honest).
-  const filteredWorkflows = useMemo(() => sortedWorkflows, [sortedWorkflows])
-  const visibleWorkflows = showAllWorkflows ? filteredWorkflows : filteredWorkflows.slice(0, 8)
-
   const toggleSeries = (key: string) => setHidden((h) => ({ ...h, [key]: !h[key] }))
-
-  const org = status?.org
 
   return (
     <>
@@ -1116,7 +979,7 @@ export default function InsightsPage() {
                       ))}
                       <ChartTooltip content={<SeriesTip />} />
                       {cycleMedian > 0 && (
-                        <ReferenceLine y={cycleMedian} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `median ${cycleMedian.toFixed(1)}d`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />
+                        <ReferenceLine y={cycleMedian} stroke="var(--chart-5)" strokeDasharray="3 3" label={{ value: `typical ${cycleMedian.toFixed(1)}d (median of buckets)`, position: "insideTopRight", fill: "var(--muted-foreground)", fontSize: 10 }} />
                       )}
                       <Line
                         type="monotone"
@@ -1190,7 +1053,8 @@ export default function InsightsPage() {
                     const mostPct = most?.pct ?? 0
                     const xxl = data.tshirt.find((s: any) => s.size === "XXL")
                     const xxlPct = xxl?.pct ?? 0
-                    const health: "green" | "amber" | "red" = xxlPct > 10 ? "red" : xxlPct > 5 ? "amber" : "green"
+                    const bigPct = data.tshirt.filter((s: any) => s.size === "L" || s.size === "XL" || s.size === "XXL").reduce((s: any, x: any) => s + (x.pct ?? 0), 0)
+                    const health: "green" | "amber" | "red" = xxlPct > 10 || bigPct > 50 ? "red" : xxlPct > 5 || bigPct > 30 ? "amber" : "green"
                     const dotClass = health === "green" ? "bg-green-500" : health === "amber" ? "bg-amber-500" : "bg-red-500"
                     const badgeClass =
                       health === "green"
@@ -1213,8 +1077,8 @@ export default function InsightsPage() {
                             {health === "green"
                               ? "Changes are small and easy to review"
                               : health === "amber"
-                                ? "Some changes are large"
-                                : "Many large changes need splitting"}
+                                ? `${bigPct.toFixed(0)}% are Large or bigger — some need splitting`
+                                : `${bigPct.toFixed(0)}% are Large or bigger — split them`}
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -1358,15 +1222,16 @@ export default function InsightsPage() {
                           <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
                             <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
                             <div className="mt-2 space-y-3">
-                              <p className="text-xs text-muted-foreground">p75 {(data.leadOverall as any)?.p75 ? (data.leadOverall as any).p75.toFixed(1) + " days" : "—"} and full distribution hidden until Learn.</p>
+                              <p className="text-xs text-muted-foreground">p75 {(data.leadOverall as any)?.p75 ? (data.leadOverall as any).p75.toFixed(1) + " days" : "—"} — the middle line below.</p>
                               {data.leadTime && data.leadTime.length > 0 ? (
-                                <ChartContainer config={{ p50: { label: "p50", color: "var(--chart-1)" }, p90: { label: "p90", color: "var(--chart-5)" } }} className="h-[180px] w-full">
+                                <ChartContainer config={{ p50: { label: "p50", color: "var(--chart-1)" }, p75: { label: "p75", color: "var(--chart-2)" }, p90: { label: "p90", color: "var(--chart-5)" } }} className="h-[180px] w-full">
                                   <AreaChart data={data.leadTime} margin={{ left: 12, right: 12, top: 4 }}>
                                     <CartesianGrid vertical={false} />
                                     <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
                                     <YAxis tickLine={false} axisLine={false} tickMargin={8} width={30} tickFormatter={(v: number) => `${v.toFixed(0)}d`} />
                                     <ChartTooltip content={<LeadTimeTip />} />
-                                    <Area type="monotone" dataKey="p90" stroke="var(--chart-5)" fill="var(--chart-5)" fillOpacity={0.15} strokeWidth={1} dot={false} />
+                                    <Area type="monotone" dataKey="p90" stroke="var(--chart-5)" fill="var(--chart-5)" fillOpacity={0.15} strokeWidth={1} strokeDasharray="4 3" dot={false} />
+                                    <Area type="monotone" dataKey="p75" stroke="var(--chart-2)" fill="var(--chart-2)" fillOpacity={0.12} strokeWidth={1} strokeDasharray="4 3" dot={false} />
                                     <Area type="monotone" dataKey="p50" stroke="var(--chart-1)" fill="var(--chart-1)" fillOpacity={0.25} strokeWidth={2} dot={false} />
                                   </AreaChart>
                                 </ChartContainer>
@@ -1406,7 +1271,7 @@ export default function InsightsPage() {
                             </CardTitle>
                             <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass}`}>{label}</span>
                           </div>
-                          <CardDescription className="truncate text-xs">Work in progress is steady</CardDescription>
+                          <CardDescription className="truncate text-xs">{cur} open now · avg {avg.toFixed(1)} open</CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="flex items-baseline justify-between gap-2">
@@ -1480,7 +1345,7 @@ export default function InsightsPage() {
                             <span className={`size-3 rounded-full ${dotClass}`} aria-label={health} />
                           </div>
                           <p className="truncate text-[11px] text-muted-foreground">
-                            {rate > 0 ? `1 in ${oneIn} never ships` : `${closed} closed without merge`} {totalClosed ? `· ${closed} of ${totalClosed} closed` : ""}
+                            {rate > 0 ? `1 in ${oneIn} decided PRs never ships` : `${closed} closed without merge`} {totalClosed ? `· ${closed} of ${totalClosed} decided (open PRs excluded)` : ""}
                           </p>
                           <ChartContainer
                             config={{
@@ -1502,7 +1367,7 @@ export default function InsightsPage() {
                           <details className="mt-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
                             <summary className="cursor-pointer list-none text-xs font-medium text-primary">Learn</summary>
                             <div className="mt-2 space-y-2 text-xs text-muted-foreground">
-                              <p>Abandoned rate is closed without merge divided by merged plus closed.</p>
+                              <p>Abandoned rate is closed-without-merge divided by merged plus closed — still-open PRs are excluded, so it overstates waste while many PRs are undecided.</p>
                               <p>Healthy under 10 percent, watch 10 to 20, high waste over 20.</p>
                               {data.abandon?.bySize ? (
                                 <div>
@@ -1530,10 +1395,8 @@ export default function InsightsPage() {
             </div>
           ) : null}
 
-          {/* CI moved to /ci — see dedicated CI page */}
-
-
-          {/* CI moved to /ci — see dedicated CI page */}
+          {/* CI lives on the dedicated /ci page — no duplication here. */}
+          <WhatWeShip overview={overview} />
 
             </>
           </div>

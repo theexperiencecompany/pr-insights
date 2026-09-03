@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, Download, Loader2 } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import {
   avatarUrl,
@@ -51,15 +51,15 @@ type Metric =
   | 'commitsperfile'
   | 'ageclose'
 
-const METRICS: { value: Metric; label: string }[] = [
+const METRICS: { value: Metric; label: string; title?: string }[] = [
   { value: 'diff', label: 'Total lines' },
   { value: 'additions', label: 'Additions' },
   { value: 'deletions', label: 'Deletions' },
   { value: 'files', label: 'Files changed' },
   { value: 'commits', label: 'Commits' },
   { value: 'timemerge', label: 'Time to merge' },
-  { value: 'commitsperfile', label: 'Commits per file' },
-  { value: 'ageclose', label: 'Age when closed' },
+  { value: 'commitsperfile', label: 'Commits per file', title: 'Average commits per changed file — high values mean churn on few files' },
+  { value: 'ageclose', label: 'Age when closed', title: 'Days from opened to closed without merge' },
 ]
 
 const STATES: { value: string; label: string }[] = [
@@ -165,7 +165,7 @@ export default function LeaderboardsPage() {
     [metric, state, order, repoParam, authorParam, fromParam, toParam, page],
   )
 
-  const { data: contributors } = useApi(getContributors)
+  const { data: contributors } = useApi(() => getContributors({ per_page: 200 }))
   const { data: shame, loading: shameLoading, error: shameError } = useApi(getShame)
 
   const updateParams = (next: Record<string, string | null>) => {
@@ -237,6 +237,7 @@ export default function LeaderboardsPage() {
       if (rows.length === 0) return
       const header = [
         'rank',
+        'metric',
         'title',
         'repo',
         'number',
@@ -253,6 +254,7 @@ export default function LeaderboardsPage() {
         ...rows.map((row, i) =>
           [
             i + 1,
+            metric,
             csvEscape(row.pull.title),
             csvEscape(row.pull.repo),
             row.pull.number,
@@ -289,6 +291,20 @@ export default function LeaderboardsPage() {
           ? 'font-bold text-orange-700 dark:text-orange-400'
           : 'text-muted-foreground'
 
+  // The date window matches the state-relevant date (server: merged >
+  // closed > opened), so the column follows the same rule.
+  const dateNoun =
+    state === 'merged'
+      ? 'merged date'
+      : state === 'closed'
+        ? 'closed date'
+        : state === 'open'
+          ? 'opened date'
+          : 'merged / closed / opened date'
+  const dateHeader =
+    state === 'merged' ? 'Merged' : state === 'closed' ? 'Closed' : state === 'open' ? 'Opened' : 'Decided'
+  const rowDate = (pull: RankedPull['pull']) => pull.mergedAt ?? pull.closedAt ?? pull.createdAt
+
   return (
     <>
       <PageHeader
@@ -299,7 +315,7 @@ export default function LeaderboardsPage() {
       <Tabs value={metric} onValueChange={handleMetricChange} className="mb-4">
         <TabsList className="w-full justify-start overflow-x-auto">
           {METRICS.map((m) => (
-            <TabsTrigger key={m.value} value={m.value} className="flex-none px-3">
+            <TabsTrigger key={m.value} value={m.value} className="flex-none px-3" title={m.title}>
               {m.label}
             </TabsTrigger>
           ))}
@@ -350,7 +366,7 @@ export default function LeaderboardsPage() {
           value={fromParam}
           onChange={(event) => handleFromChange(event.target.value)}
           aria-label="From"
-          title="Merged after this date"
+          title={`Window start — matches ${dateNoun}`}
           className="w-36"
         />
         <Input
@@ -358,7 +374,7 @@ export default function LeaderboardsPage() {
           value={toParam}
           onChange={(event) => handleToChange(event.target.value)}
           aria-label="To"
-          title="Merged before this date"
+          title={`Window end — matches ${dateNoun}`}
           className="w-36"
         />
         <DatePresets from={fromParam} to={toParam} onFromChange={handleFromChange} onToChange={handleToChange} />
@@ -374,7 +390,7 @@ export default function LeaderboardsPage() {
                 {order === 'asc' ? <ArrowUp /> : <ArrowDown />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{order === 'asc' ? 'Descending' : 'Ascending'}</TooltipContent>
+            <TooltipContent>{order === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
         {(repoParam !== 'all' || authorParam !== 'all' || fromParam || toParam || order === 'asc' || state !== 'merged') && (
@@ -439,14 +455,12 @@ export default function LeaderboardsPage() {
                   cell: (row) => (
                     <div className="flex items-center gap-2">
                       <img src={avatarUrl(row.pull.author)} alt="" className="size-5 rounded-full" loading="lazy" />
-                      <a
-                        href={`https://github.com/${row.pull.author}`}
-                        target="_blank"
-                        rel="noreferrer"
+                      <Link
+                        to={`/people/${row.pull.author}`}
                         className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                       >
                         {row.pull.author}
-                      </a>
+                      </Link>
                     </div>
                   ),
                 },
@@ -497,10 +511,10 @@ export default function LeaderboardsPage() {
                     ]
                   : []),
                 {
-                  header: 'Merged',
+                  header: dateHeader,
                   headerClassName: 'text-right',
                   cellClassName: 'whitespace-nowrap text-right text-muted-foreground',
-                  cell: (row: RankedPull) => formatDate(row.pull.mergedAt),
+                  cell: (row: RankedPull) => formatDate(rowDate(row.pull)),
                 },
               ]}
             />
@@ -521,7 +535,7 @@ export default function LeaderboardsPage() {
                   <TableHead className="text-right bg-muted">{metricCol(metric).label}</TableHead>
                   {metric !== 'files' && <TableHead className="text-right">Files</TableHead>}
                   {metric !== 'commits' && <TableHead className="text-right">Commits</TableHead>}
-                  <TableHead className="text-right">Merged</TableHead>
+                  <TableHead className="text-right">{dateHeader}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -552,14 +566,12 @@ export default function LeaderboardsPage() {
                             className="size-5 rounded-full"
                             loading="lazy"
                           />
-                          <a
-                            href={`https://github.com/${row.pull.author}`}
-                            target="_blank"
-                            rel="noreferrer"
+                          <Link
+                            to={`/people/${row.pull.author}`}
                             className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                           >
                             {row.pull.author}
-                          </a>
+                          </Link>
                         </div>
                       </TableCell>
                       {metric !== 'additions' && (
@@ -586,7 +598,7 @@ export default function LeaderboardsPage() {
                         </TableCell>
                       )}
                       <TableCell className="whitespace-nowrap text-right text-muted-foreground">
-                        {formatDate(row.pull.mergedAt)}
+                        {formatDate(rowDate(row.pull))}
                       </TableCell>
                     </TableRow>
                   )
@@ -703,7 +715,7 @@ export default function LeaderboardsPage() {
                   <span className="font-mono text-red-600 dark:text-red-400">
                     −{comma(entry.pull.deletions)}
                   </span>
-                  <span className="font-semibold tabular-nums">{comma(entry.value)}</span>
+                  <span className="font-semibold tabular-nums">{comma(entry.value)} lines</span>
                 </span>
               </div>
             ))

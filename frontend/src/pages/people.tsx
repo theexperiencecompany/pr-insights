@@ -103,12 +103,14 @@ export default function PeoplePage() {
   if (!data) return null
 
   const rows = data.rows
-  const totalMerged = rows.reduce((s, c) => s + c.merged, 0)
-  const top3 = rows.slice(0, 3)
-  const top3Share = totalMerged > 0 ? (top3.reduce((s, c) => s + c.merged, 0) / totalMerged) * 100 : 0
   const top10 = rows.slice(0, 10)
   const maxMerged = Math.max(1, ...top10.map((c) => c.merged))
   const hasFilters = repoParam !== 'all' || !!qParam || !!fromParam || !!toParam
+  // Bus factor must be org-wide: page rows are filtered/paginated, so a share
+  // computed from them is wrong. overview.hero.bus covers the whole org.
+  const bus = overview?.hero?.bus
+  const busTop = bus?.top?.slice(0, 3) ?? []
+  const busShare = bus?.top3Share ?? 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -188,7 +190,7 @@ export default function PeoplePage() {
           </CardHeader>
           <CardContent className="flex h-full flex-col justify-center gap-3">
             <div className="flex -space-x-2">
-              {top3.map((c) => (
+              {busTop.map((c) => (
                 <img
                   key={c.login}
                   src={avatarUrl(c.login)}
@@ -200,11 +202,11 @@ export default function PeoplePage() {
             </div>
             <p className="text-sm text-muted-foreground">
               Top 3 authors ship{' '}
-              <span className="font-semibold text-foreground">{top3Share.toFixed(0)}%</span> of all
-              merges.
+              <span className="font-semibold text-foreground">{busShare.toFixed(0)}%</span> of all
+              merges (org-wide).
             </p>
             <p className="text-xs text-muted-foreground">
-              {top3.map((c) => c.login).join(', ')} — a single contributor leaving would be hard to
+              {busTop.map((c) => c.login).join(', ')} — a single contributor leaving would be hard to
               replace.
             </p>
           </CardContent>
@@ -215,6 +217,7 @@ export default function PeoplePage() {
         <Card>
           <CardHeader>
             <SectionTitle>Ship activity — last 365 days</SectionTitle>
+            <span className="text-xs text-muted-foreground">Org-wide · ignores the filters above</span>
           </CardHeader>
           <CardContent>
             <Heatmap dates={overview.heatmap} />
@@ -223,19 +226,22 @@ export default function PeoplePage() {
       )}
 
       <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-14">Rank</TableHead>
               <TableHead>Contributor</TableHead>
               <TableHead className="text-right">Merged PRs</TableHead>
-              <TableHead className="text-right">Additions</TableHead>
-              <TableHead className="text-right">Deletions</TableHead>
-              <TableHead className="text-right">Avg diff</TableHead>
+              <TableHead className="text-right" title="Lines added">Additions (lines)</TableHead>
+              <TableHead className="text-right" title="Lines removed">Deletions (lines)</TableHead>
+              <TableHead className="text-right" title="Average lines changed per merged PR">Avg diff (lines)</TableHead>
               <TableHead>Largest PR</TableHead>
               <TableHead className="text-right">Repos</TableHead>
-              <TableHead className="text-right">Streak</TableHead>
-              <TableHead className="text-right">Longest</TableHead>
+              <TableHead className="text-right" title="Files touched across merged PRs">Files</TableHead>
+              <TableHead className="text-right" title="Commits across merged PRs">Commits</TableHead>
+              <TableHead className="text-right" title="Current weekly merge streak">Streak (wks)</TableHead>
+              <TableHead className="text-right" title="Longest weekly merge streak">Longest (wks)</TableHead>
               <TableHead>First merged</TableHead>
               <TableHead>Last merged</TableHead>
             </TableRow>
@@ -298,6 +304,8 @@ export default function PeoplePage() {
                   )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{comma(c.reposCount)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{comma(c.files)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{comma(c.commits)}</TableCell>
                 <TableCell className="text-right">
                   {c.currentStreak >= 2 ? (
                     <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
@@ -322,6 +330,7 @@ export default function PeoplePage() {
             })}
           </TableBody>
         </Table>
+        </div>
         {data.pager && <Pager pager={data.pager} onPage={handlePageChange} />}
       </Card>
     </div>

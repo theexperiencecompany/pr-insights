@@ -1,5 +1,5 @@
 import { Flame } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   Area,
@@ -53,9 +53,10 @@ function CycleTip({ active, payload, label }: Partial<import('recharts').Tooltip
   const entry = payload[0]
   if (entry?.value == null) return null
   const col = getPayloadColor(entry) ?? "var(--chart-4)"
+  const n = (entry.payload as any)?.cycleCount
   return (
     <TipShell label={label}>
-      <TipRow color={col as string} label="Median" value={`${Number(entry.value).toFixed(1)} days`} />
+      <TipRow color={col as string} label="Median" value={`${Number(entry.value).toFixed(1)} days${typeof n === 'number' ? ` · n=${n}` : ''}`} />
     </TipShell>
   )
 }
@@ -69,6 +70,7 @@ export default function ContributorPage() {
   const { login = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const gran = searchParams.get('gran') === 'week' ? 'week' : 'month'
+  const [showAllMerged, setShowAllMerged] = useState(false)
   const { data, loading, error } = useApi(() => getContributor(login, { gran }), [login, gran])
 
   const fromParam = searchParams.get('from')
@@ -136,9 +138,23 @@ export default function ContributorPage() {
   if (!data) return null
 
   const c = data.contributor
-  const cycleData = data.monthly
-    .filter((b) => b.cycleCount > 0)
-    .map((b) => ({ label: b.label, cycle: b.cycleMedianDays }))
+  // Keep zero-merge buckets as null so the x-axis stays aligned with the
+  // merged chart — gaps mean "no merges", not "missing data".
+  const cycleData = data.monthly.map((b) => ({
+    label: b.label,
+    cycle: b.cycleCount > 0 ? b.cycleMedianDays : null,
+    cycleCount: b.cycleCount,
+  }))
+  const visibleMerged = showAllMerged ? data.merged : data.merged.slice(0, 30)
+  const peopleBack = (() => {
+    const keep = new URLSearchParams()
+    for (const k of ['repo', 'q', 'from', 'to', 'page']) {
+      const v = searchParams.get(k)
+      if (v) keep.set(k, v)
+    }
+    const qs = keep.toString()
+    return qs ? `/people?${qs}` : '/people'
+  })()
 
   const handleBrushChange = (range: any) => {
     if (!range) return
@@ -165,7 +181,7 @@ export default function ContributorPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Link to="/people" className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400">
+      <Link to={peopleBack} className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400">
         ← People
       </Link>
 
@@ -177,7 +193,8 @@ export default function ContributorPage() {
             {data.isBot && <Badge variant="secondary">bot</Badge>}
           </div>
           <p className="text-sm text-muted-foreground">
-            {comma(c.merged)} merged · <span className="text-green-600 dark:text-green-400">+{comma(c.additions)}</span>{' '}
+            {comma(c.merged)} merged · avg diff {comma(c.avgDiff)} lines · {comma(c.files)} files ·{' '}
+            {comma(c.commits)} commits · <span className="text-green-600 dark:text-green-400">+{comma(c.additions)}</span>{' '}
             <span className="text-red-600 dark:text-red-400">−{comma(c.deletions)}</span> ·{' '}
             {comma(c.reposCount)} repos
           </p>
@@ -207,7 +224,7 @@ export default function ContributorPage() {
 
       {fromParam && toParam ? (
         <div className="text-[11px] text-muted-foreground">
-          Highlighting {fromParam} → {toParam}{' '}
+          Highlighting {fromParam} → {toParam} on the activity grid below — charts show the full period{' '}
           <button
             type="button"
             onClick={() => {
@@ -304,11 +321,20 @@ export default function ContributorPage() {
       </Card>
 
       <Card>
-        <CardHeader>
-          <SectionTitle>Merged pull requests</SectionTitle>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <SectionTitle>{`Merged pull requests · ${data.merged.length}`}</SectionTitle>
+          {data.merged.length > 30 ? (
+            <button
+              type="button"
+              onClick={() => setShowAllMerged((v) => !v)}
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              {showAllMerged ? 'Show fewer' : `Show all ${data.merged.length}`}
+            </button>
+          ) : null}
         </CardHeader>
         <div>
-          {data.merged.map((p) => (
+          {visibleMerged.map((p) => (
             <PrRow key={`${p.repo}#${p.number}`} pull={p} />
           ))}
         </div>

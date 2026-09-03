@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { avatarUrl, getPulls, getStatus, type Pull } from '@/lib/api'
@@ -54,21 +54,22 @@ const SORT_TABS = [
 
 const SORT_VALUES = ['diff', 'files', 'commits', 'timemerge'] as const
 
-const SIZE_CLASSES: { label: string; className: string }[] = [
-  { label: 'XS', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
-  { label: 'S', className: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400' },
-  { label: 'M', className: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400' },
-  { label: 'L', className: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400' },
-  { label: 'XL', className: 'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400' },
-  { label: 'XXL', className: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400' },
+const SIZE_CLASSES: { label: string; className: string; title: string }[] = [
+  { label: 'XS', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400', title: 'Tiny — 10 lines or fewer' },
+  { label: 'S', className: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400', title: 'Small — 11 to 50 lines' },
+  { label: 'M', className: 'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-400', title: 'Medium — 51 to 200 lines' },
+  { label: 'L', className: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400', title: 'Large — 201 to 500 lines' },
+  { label: 'XL', className: 'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400', title: 'XL — 501 to 1000 lines' },
+  { label: 'XXL', className: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400', title: 'Massive — over 1000 lines, consider splitting' },
 ]
 
+// Thresholds mirror TShirtFor in metrics_vision.go (diff = additions + deletions).
 function sizeClass(size: number) {
-  if (size < 10) return SIZE_CLASSES[0]
-  if (size < 50) return SIZE_CLASSES[1]
-  if (size < 100) return SIZE_CLASSES[2]
-  if (size < 500) return SIZE_CLASSES[3]
-  if (size < 1000) return SIZE_CLASSES[4]
+  if (size <= 10) return SIZE_CLASSES[0]
+  if (size <= 50) return SIZE_CLASSES[1]
+  if (size <= 200) return SIZE_CLASSES[2]
+  if (size <= 500) return SIZE_CLASSES[3]
+  if (size <= 1000) return SIZE_CLASSES[4]
   return SIZE_CLASSES[5]
 }
 
@@ -179,6 +180,7 @@ function VirtualizedPullList({ pulls }: { pulls: Pull[] }) {
                     <span className="flex items-center gap-1.5">
                       <span
                         data-testid="size-chip"
+                        title={sizeInfo.title}
                         className={cn(
                           'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
                           sizeInfo.className,
@@ -359,6 +361,11 @@ export default function PullsPage() {
 
   const stateValue = botParam === '1' || botParam === '0' ? (botParam === '1' ? 'bot' : 'human') : stateParam
 
+  // Ranked views show the state-relevant date (merged / closed / opened).
+  const dateHeader =
+    stateValue === 'merged' ? 'Merged' : stateValue === 'closed' ? 'Closed' : stateValue === 'open' ? 'Opened' : 'Decided'
+  const rowDate = (pull: Pull) => pull.mergedAt ?? pull.closedAt ?? pull.createdAt
+
   const org = status?.org ?? ''
 
   let content: ReactNode
@@ -392,7 +399,7 @@ export default function PullsPage() {
                   <TableHead className="text-right bg-muted">{metricLabel(activeTab)}</TableHead>
                   {activeTab !== 'files' && <TableHead className="text-right">Files</TableHead>}
                   {activeTab !== 'commits' && <TableHead className="text-right">Commits</TableHead>}
-                  <TableHead className="text-right">Merged</TableHead>
+                  <TableHead className="text-right">{dateHeader}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -423,14 +430,12 @@ export default function PullsPage() {
                             className="size-5 rounded-full"
                             loading="lazy"
                           />
-                          <a
-                            href={`https://github.com/${pull.author}`}
-                            target="_blank"
-                            rel="noreferrer"
+                          <Link
+                            to={`/people/${pull.author}`}
                             className="font-medium text-foreground hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                           >
                             {pull.author}
-                          </a>
+                          </Link>
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono text-green-600 tabular-nums dark:text-green-400">
@@ -453,7 +458,7 @@ export default function PullsPage() {
                         </TableCell>
                       )}
                       <TableCell className="whitespace-nowrap text-right text-muted-foreground">
-                        {formatDate(pull.mergedAt)}
+                        {formatDate(rowDate(pull))}
                       </TableCell>
                     </TableRow>
                   )
@@ -485,6 +490,7 @@ export default function PullsPage() {
                         <span className="flex items-center gap-1.5">
                           <span
                             data-testid="size-chip"
+                            title={sizeInfo.title}
                             className={cn(
                               'inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-semibold',
                               sizeInfo.className,

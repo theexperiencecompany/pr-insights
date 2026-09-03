@@ -338,7 +338,7 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 export const getStatus = (): Promise<Status> => fetch('/api/status', { cache: 'no-store' }).then(json<Status>)
 export const getOverview = (params: { largest?: number; gran?: string } = {}): Promise<OverviewData> =>
   fetch(`/api/overview${qs(params)}`).then(json<OverviewData>)
-export const getContributors = (params: { repo?: string; q?: string; page?: number; from?: string; to?: string } = {}): Promise<ContributorsData> => fetch(`/api/contributors${qs(params)}`).then(json<ContributorsData>)
+export const getContributors = (params: { repo?: string; q?: string; page?: number; per_page?: number; from?: string; to?: string } = {}): Promise<ContributorsData> => fetch(`/api/contributors${qs(params)}`).then(json<ContributorsData>)
 export const getContributor = (login: string, params: { gran?: string } = {}): Promise<ContributorDetail> =>
   fetch(`/api/contributor${qs({ login, gran: params.gran })}`).then(json<ContributorDetail>)
 export const getShame = (): Promise<ShameData> => fetch('/api/shame').then(json<ShameData>)
