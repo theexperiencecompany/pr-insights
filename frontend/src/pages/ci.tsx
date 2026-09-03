@@ -62,7 +62,7 @@ function ThresholdBadge({ p50, p90, successRate }: { p50: number; p90: number; s
 
 function HealthDot({ wf }: { wf: WorkflowHybrid }) {
   const slow = wf.isSlow || wf.successRate < 85
-  const watch = !slow && (wf.p50Min > 8 || wf.p90Min > 20 || wf.successRate < 92)
+  const watch = !slow && (wf.p50Min > 8 || wf.p90Min > 20 || wf.successRate < 90)
   const color = slow ? 'bg-red-500' : watch ? 'bg-amber-500' : 'bg-emerald-500'
   const label = slow ? 'Slow' : watch ? 'Watch' : 'Healthy'
   return (
@@ -334,7 +334,7 @@ export default function CIPage() {
           <div className={cn(isReloading && 'pointer-events-none opacity-50 transition-opacity')}>
             {/* Top big numbers row */}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Card className={cn(' overall && (overall.p50 > 10 ? 'border-red-200 dark:border-red-900' : ''))}>
+              <Card className={cn(overall && overall.p50 > 10 ? 'border-red-200 dark:border-red-900' : '')}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Median · p50</span>
@@ -354,7 +354,7 @@ export default function CIPage() {
                 </CardContent>
               </Card>
 
-              <Card className={cn(' overall && overall.p90 > 25 ? 'border-red-200 dark:border-red-900' : '')}>
+              <Card className={cn(overall && overall.p90 > 25 ? 'border-red-200 dark:border-red-900' : '')}>
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Tail · p90</span>
@@ -432,8 +432,8 @@ export default function CIPage() {
                           </PieChart>
                         </ChartContainer>
                         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center" aria-hidden>
-                          <div className="text-xl font-semibold tabular-nums">{data.split.homePctRuns.toFixed(0)}% <span className="text-xs font-normal text-muted-foreground">home</span></div>
-                          <div className="text-[11px] text-muted-foreground">{data.split.homePctMinutes.toFixed(0)}% of minutes</div>
+                          <div className="text-xl font-semibold tabular-nums">{data.split.homePctRuns.toFixed(0)}% <span className="text-xs font-normal text-muted-foreground">home (runs)</span></div>
+                          <div className="text-[11px] text-muted-foreground">{comma(data.split.homeRuns)} runs · {comma(data.split.homeMinutes)} min</div>
                         </div>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-xs">
@@ -441,7 +441,7 @@ export default function CIPage() {
                         <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-[var(--chart-3)]" />github {data.split.githubPctRuns.toFixed(0)}% ({comma(data.split.githubRuns)})</span>
                         {data.split.unknownRuns>0 && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-[var(--chart-5)]" />unknown {((data.split.unknownRuns/data.split.totalRuns)*100).toFixed(0)}%</span>}
                       </div>
-                      <p className="mt-2 text-center text-[11px] text-muted-foreground">Since home hosting 2 days ago, historical home is estimated — inferred via workflow name substring allowlist (heuristic, no jobs API yet). Unknown = empty workflow.</p>
+                      <p className="mt-2 text-center text-[11px] text-muted-foreground">Home hosting started Aug 28, 2026 — runs before that are counted as GitHub. Home vs GitHub is inferred from the workflow name (heuristic, no jobs API yet). Unknown = empty workflow name.</p>
                     </>
                   )}
                 </CardContent>
@@ -451,8 +451,8 @@ export default function CIPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="text-base font-semibold">{gran === 'week' ? 'Weekly share of runs — home vs GitHub (since home hosting 2 days ago, historical home is estimated)' : 'Monthly share of runs — home vs GitHub (since home hosting 2 days ago, historical home is estimated)'}</CardTitle>
-                      <p className="text-xs text-muted-foreground">{gran === 'week' ? 'Weekly' : 'Monthly'} share of runs · {data.trend.length} buckets · hover for counts</p>
+                      <CardTitle className="text-base font-semibold">{gran === 'week' ? 'Weekly share of runs — home vs GitHub' : 'Monthly share of runs — home vs GitHub'}</CardTitle>
+                      <p className="text-xs text-muted-foreground">{gran === 'week' ? 'Weekly' : 'Monthly'} share of runs · {data.trend.length} buckets · hover for counts · home hosting started Aug 28, 2026</p>
                     </div>
                     <Badge variant="outline" className="text-[10px]">{gran}</Badge>
                   </div>
@@ -473,7 +473,7 @@ export default function CIPage() {
                       </AreaChart>
                     </ChartContainer>
                   )}
-                  <p className="mt-2 text-[11px] text-muted-foreground">Since home hosting 2 days ago, historical home is estimated (heuristic via workflow name substring allowlist, no jobs API yet). Unknown gray when &gt;0. GitHub bottom, home middle, unknown top — 100% stacked.</p>
+                  <p className="mt-2 text-[11px] text-muted-foreground">Home hosting started Aug 28, 2026 — earlier runs count as GitHub. Unknown (gray) appears only when a run has no workflow name. GitHub bottom, home middle, unknown top — 100% stacked.</p>
                 </CardContent>
               </Card>
             </div>
@@ -576,7 +576,7 @@ export default function CIPage() {
                   const red = wf.isSlow || wf.successRate < 85
                   const dim = wf.isSampleSmall
                   return (
-                    <Card key={wf.key} className={cn(' red ? 'border-red-200 dark:border-red-900' : '', dim && 'opacity-60')}>
+                    <Card key={wf.key} className={cn(red ? 'border-red-200 dark:border-red-900' : '', dim && 'opacity-60')}>
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
@@ -703,7 +703,7 @@ export default function CIPage() {
                   </Table>
                 </div>
                 <div className="border-t bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-                  Health red if p50&gt;10m or p90&gt;25m or success&lt;85% · Hosting inferred via substring allowlist (lint,test,build,quality,mutation,trivy,docker,integration,e2e,unit,hybrid,home → home) · Queue = RunStartedAt − CreatedAt median · Flake = failure→success within 24h / failures · MTTR = median recovery to next success · Wasted = failure minutes / total · Budget = workflow minutes / total minutes · Δ = workflow p50 − opposite lane global p50 (negative = home faster) · Cost = totalMinutes / merges
+                  Health red if p50&gt;10m or p90&gt;25m or success&lt;85% · Watch if p50&gt;8m or p90&gt;20m or success&lt;90% · Hosting: workflow name contains self-hosted/hybrid/home → home (live since Aug 28, 2026; earlier runs count as GitHub) · Queue = RunStartedAt − CreatedAt median · Flake = failure→success within 24h / failures · MTTR = median recovery to next success · Wasted = failure minutes / total · Budget = workflow minutes / total minutes · Δ = workflow p50 − opposite lane global p50 (negative = home faster) · Cost = totalMinutes / merges
                 </div>
               </Card>
             </div>
