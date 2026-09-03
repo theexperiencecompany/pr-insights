@@ -52,8 +52,8 @@ const trendConfig = {
   unknown: { label: 'Unknown', color: 'var(--chart-5)' },
 } satisfies ChartConfig
 
-function ThresholdBadge({ p50, p90, successRate }: { p50: number; p90: number; successRate?: number }) {
-  const slow = p50 > 10 || p90 > 25 || (successRate !== undefined && successRate < 85)
+function ThresholdBadge({ p50, p90, successRate, tP50 = 10, tP90 = 25 }: { p50: number; p90: number; successRate?: number; tP50?: number; tP90?: number }) {
+  const slow = p50 > tP50 || p90 > tP90 || (successRate !== undefined && successRate < 85)
   const watch = !slow && (p50 > 8 || p90 > 20 || (successRate !== undefined && successRate < 90))
   if (slow) return <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">Slow</Badge>
   if (watch) return <Badge variant="secondary" className="px-1.5 py-0 text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200">Watch</Badge>
@@ -258,6 +258,13 @@ export default function CIPage() {
   const overall = data ? { p50: data.overallP50, p90: data.overallP90, avg: data.overallAvg, totalRuns: data.totalRuns, totalMinutes: data.totalMinutes, homePct: data.split.homePctRuns, homePctMin: data.split.homePctMinutes, githubPct: data.split.githubPctRuns } : null
 
   const slowCount = data?.workflows.filter(w => w.isSlow || w.successRate < 85).length ?? 0
+  const tP50 = data?.thresholds?.p50 ?? 10
+  const tP90 = data?.thresholds?.p90 ?? 25
+  const budgetTop = useMemo(() => {
+    if (!data) return []
+    return [...data.workflows].sort((a, b) => b.budgetSharePct - a.budgetSharePct).slice(0, 8)
+  }, [data])
+  const maxBudget = Math.max(1, ...budgetTop.map((w) => w.budgetSharePct))
 
   const handleSort = (k: string) => {
     setSortKey((s) => (s.key === k ? { key: k, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' }))
@@ -367,7 +374,7 @@ export default function CIPage() {
                     <span>home p50 {data.homeP50 ? fmtDuration(data.homeP50) : '—'} · github p50 {data.githubP50 ? fmtDuration(data.githubP50) : '—'}</span>
                   </div>
                   <div className="mt-1 text-[11px] text-muted-foreground">
-                    Δ home vs github {data.deltaHomeVsGithub != null ? `${data.deltaHomeVsGithub > 0 ? '+' : ''}${data.deltaHomeVsGithub.toFixed(1)} min` : '—'} {data.deltaHomeVsGithub < 0 ? '· home faster' : data.deltaHomeVsGithub > 0 ? '· home slower' : ''}
+                    Δ lanes (global p50) {data.deltaHomeVsGithub != null ? `${data.deltaHomeVsGithub > 0 ? '+' : ''}${data.deltaHomeVsGithub.toFixed(1)} min` : '—'} {data.deltaHomeVsGithub < 0 ? '· home faster' : data.deltaHomeVsGithub > 0 ? '· home slower' : ''}
                   </div>
                 </CardContent>
               </Card>
@@ -517,6 +524,38 @@ export default function CIPage() {
               </Card>
             </div>
 
+            {/* Budget, tail & queue distributions — top lanes by CI-time share */}
+            {budgetTop.length > 0 ? (
+              <Card className="mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base font-semibold">Where CI time goes</CardTitle>
+                  <p className="text-xs text-muted-foreground">Top {budgetTop.length} lanes by budget share · bar = share of total CI minutes · red badge = over threshold (p50&gt;{tP50}m p90&gt;{tP90}m success&lt;85%)</p>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2.5">
+                  {budgetTop.map((wf) => (
+                    <div key={wf.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium" title={wf.workflow}>{wf.workflow}</span>
+                        <HostingPill hosting={wf.hosting} />
+                      </div>
+                      <ThresholdBadge p50={wf.p50Min} p90={wf.p90Min} successRate={wf.successRate} tP50={tP50} tP90={tP90} />
+                      <div className="col-span-2 h-2 overflow-hidden rounded-full bg-muted" title={`${wf.budgetSharePct.toFixed(1)}% of CI minutes`}>
+                        <div className={cn('h-full', (wf.isSlow || wf.successRate < 85) ? 'bg-red-400' : 'bg-[var(--chart-2)]')} style={{ width: `${(wf.budgetSharePct / maxBudget) * 100}%` }} />
+                      </div>
+                      <div className="col-span-2 flex flex-wrap gap-x-3 text-[11px] tabular-nums text-muted-foreground">
+                        <span>{wf.budgetSharePct.toFixed(1)}% budget</span>
+                        <span>p50 {fmtDuration(wf.p50Min)}</span>
+                        <span>p90 {fmtDuration(wf.p90Min)}</span>
+                        {wf.p95Min ? <span>p95 {fmtDuration(wf.p95Min)}</span> : null}
+                        <span>queue {wf.queueMedianMin ? fmtDuration(wf.queueMedianMin) : '—'}</span>
+                        <span>{wf.successRate.toFixed(0)}% success · {comma(wf.runs)} runs</span>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
+
             {/* Needs Attention — FLAKY full */}
             {(() => {
               const needs = (data as any).needsAttention as WorkflowHybrid[] | undefined
@@ -569,7 +608,7 @@ export default function CIPage() {
             <div className="mt-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold">Per-workflow lane health — big numbers, red if &gt; threshold</h2>
-                <span className="text-xs text-muted-foreground">{data.workflows.length} workflows · thresholds p50&gt;10m p90&gt;25m success&lt;85% · n&lt;10 dimmed</span>
+                <span className="text-xs text-muted-foreground">{data.workflows.length} workflows · thresholds p50&gt;{tP50}m p90&gt;{tP90}m success&lt;85% · n&lt;10 dimmed</span>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {data.workflows.slice(0, 6).map((wf) => {
@@ -588,7 +627,7 @@ export default function CIPage() {
                         <div className={cn('mt-2 flex items-baseline gap-2 text-xl font-semibold tabular-nums', red ? 'text-red-600 dark:text-red-400' : '')}>
                           <span>{wf.p50Min.toFixed(1)}m</span>
                           <span className="text-sm font-normal text-muted-foreground">p50 · p90 {wf.p90Min.toFixed(1)}m</span>
-                          <span className="ml-auto"><ThresholdBadge p50={wf.p50Min} p90={wf.p90Min} successRate={wf.successRate} /></span>
+                          <span className="ml-auto"><ThresholdBadge p50={wf.p50Min} p90={wf.p90Min} successRate={wf.successRate} tP50={tP50} tP90={tP90} /></span>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">avg {fmtDuration(wf.avgMin)} · p99 {fmtDuration(wf.p99Min)} · p95 {wf.p95Min ? fmtDuration(wf.p95Min) : '—'} · queue {wf.queueMedianMin ? fmtDuration(wf.queueMedianMin) : '—'} · budget {wf.budgetSharePct.toFixed(1)}%</div>
                         <div className="mt-1 flex flex-wrap gap-1 text-[10px]">

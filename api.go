@@ -810,6 +810,26 @@ func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
 		contribs = filtered
 	}
 
+	// Bots/humans toggle (?bot=1|0) — same semantics as /api/pulls.
+	switch r.URL.Query().Get("bot") {
+	case "1", "true":
+		filtered := make([]Contributor, 0, len(contribs))
+		for _, c := range contribs {
+			if c.IsBot {
+				filtered = append(filtered, c)
+			}
+		}
+		contribs = filtered
+	case "0", "false":
+		filtered := make([]Contributor, 0, len(contribs))
+		for _, c := range contribs {
+			if !c.IsBot {
+				filtered = append(filtered, c)
+			}
+		}
+		contribs = filtered
+	}
+
 	pg := paginate(len(contribs), page, clampedPerPage(r))
 	rows := contribs[pg.From:pg.To]
 	writeJSON(w, struct {

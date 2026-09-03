@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
-import { Search } from 'lucide-react'
+import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
@@ -341,12 +341,16 @@ export default function PullsPage() {
   }
 
   const handleClearFilters = () => {
-    updateParams({ repo: null, state: null, bot: null, q: null, page: null })
+    updateParams({ repo: null, state: null, bot: null, q: null, order: null, page: null })
     setQuery('')
   }
 
   const handleTabChange = (value: string) => {
     updateParams({ sort: value === 'recent' ? null : value, order: null, page: null })
+  }
+
+  const handleOrderToggle = () => {
+    updateParams({ order: orderParam === 'asc' ? null : 'asc', page: null })
   }
 
   const handleSearch = (event: FormEvent) => {
@@ -589,6 +593,15 @@ export default function PullsPage() {
             Clear
           </Button>
         )}
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={handleOrderToggle}
+          aria-label="Toggle sort order"
+          title={orderParam === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+        >
+          {orderParam === 'asc' ? <ArrowUp /> : <ArrowDown />}
+        </Button>
       </FilterBar>
       {content}
     </>

@@ -4,6 +4,8 @@ import type { DefaultLegendContentProps, TooltipContentProps } from 'recharts'
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   Brush,
   CartesianGrid,
   Cell,
@@ -479,6 +481,52 @@ function WhatWeShip({ overview }: { overview: OverviewData | undefined | null })
             <p className="text-[11px] text-muted-foreground">Current vs previous window · New means no merges in the prior window.</p>
           </CardContent>
         </Card>
+      </div>
+    </div>
+  )
+}
+
+// When we ship: weekday + hour-of-day merge distribution (server zone).
+// Org-wide lifetime counters — the caption says so.
+function WhenWeShip({ overview }: { overview: OverviewData | undefined | null }) {
+  const dist = overview?.shipDist
+  const weekdayData = (dist?.weekday ?? []).map((v, i) => ({
+    day: dist?.weekdayLabels?.[i] ?? `Day ${i}`,
+    merged: v,
+  }))
+  const hourData = (dist?.hour ?? []).map((v, i) => ({ hour: `${i}h`, merged: v }))
+  const peakDay = weekdayData.reduce((a, b) => (b.merged > a.merged ? b : a), { day: '—', merged: 0 })
+  const peakHour = hourData.reduce((a, b) => (b.merged > a.merged ? b : a), { hour: '—', merged: 0 })
+  if (!dist || (peakDay.merged === 0 && peakHour.merged === 0)) return null
+  return (
+    <div className="mt-6">
+      <SectionHeading>When we ship</SectionHeading>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Org-wide · times in {dist.zone || 'UTC'} · busiest {peakDay.day}s around {peakHour.hour} — ignores the repo and period filters above.
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ChartCard title="Merges by weekday">
+          <ChartContainer config={{ merged: { label: 'Merged', color: 'var(--chart-1)' } }} className="aspect-auto h-44">
+            <BarChart data={weekdayData} margin={{ left: 0, right: 4, top: 4 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={6} />
+              <YAxis hide />
+              <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<SeriesTip />} />
+              <Bar dataKey="merged" fill="var(--color-merged)" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </ChartCard>
+        <ChartCard title="Merges by hour">
+          <ChartContainer config={{ merged: { label: 'Merged', color: 'var(--chart-1)' } }} className="aspect-auto h-44">
+            <BarChart data={hourData} margin={{ left: 0, right: 4, top: 4 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="hour" tickLine={false} axisLine={false} tickMargin={6} interval={3} />
+              <YAxis hide />
+              <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<SeriesTip />} />
+              <Bar dataKey="merged" fill="var(--color-merged)" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        </ChartCard>
       </div>
     </div>
   )
@@ -1397,6 +1445,7 @@ export default function InsightsPage() {
 
           {/* CI lives on the dedicated /ci page — no duplication here. */}
           <WhatWeShip overview={overview} />
+          <WhenWeShip overview={overview} />
 
             </>
           </div>

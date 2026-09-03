@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, Download, Loader2 } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router-dom'
 
@@ -191,6 +191,18 @@ export default function LeaderboardsPage() {
     updateParams({ author: value === 'all' ? null : value, page: null })
   }
 
+  // Type-to-search: commit only exact logins (server matches authors exactly);
+  // partial text stays local so the list doesn't flash empty while typing.
+  const [authorInput, setAuthorInput] = useState(authorParam === 'all' ? '' : authorParam)
+  useEffect(() => {
+    setAuthorInput(authorParam === 'all' ? '' : authorParam)
+  }, [authorParam])
+  const knownLogins = new Set((contributors?.rows ?? []).map((c) => c.login))
+  const handleAuthorInput = (value: string) => {
+    setAuthorInput(value)
+    if (value === '' || knownLogins.has(value)) handleAuthorChange(value || 'all')
+  }
+
   const handleRepoChange = (value: string) => {
     updateParams({ repo: value === 'all' ? null : value, page: null })
   }
@@ -348,19 +360,22 @@ export default function LeaderboardsPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select value={authorParam} onValueChange={handleAuthorChange}>
-          <SelectTrigger aria-label="Filter by author" className="max-w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All authors</SelectItem>
+        <span className="relative">
+          <Input
+            value={authorInput}
+            onChange={(event) => handleAuthorInput(event.target.value)}
+            onBlur={() => setAuthorInput(authorParam === 'all' ? '' : authorParam)}
+            placeholder="All authors — type to search"
+            aria-label="Filter by author"
+            className="w-44"
+            list="leaderboard-authors"
+          />
+          <datalist id="leaderboard-authors">
             {contributors?.rows.map((contributor) => (
-              <SelectItem key={contributor.login} value={contributor.login}>
-                {contributor.login}
-              </SelectItem>
+              <option key={contributor.login} value={contributor.login} />
             ))}
-          </SelectContent>
-        </Select>
+          </datalist>
+        </span>
         <Input
           type="date"
           value={fromParam}

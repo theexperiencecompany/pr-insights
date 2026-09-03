@@ -45,6 +45,7 @@ export default function PeoplePage() {
   const qParam = searchParams.get('q') ?? ''
   const fromParam = searchParams.get('from') ?? ''
   const toParam = searchParams.get('to') ?? ''
+  const botParam = searchParams.get('bot') ?? 'all'
   const pageParam = searchParams.get('page')
   const parsedPage = Number(pageParam)
   const page = pageParam !== null && Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1
@@ -57,11 +58,12 @@ export default function PeoplePage() {
       getContributors({
         repo: repoParam === 'all' ? undefined : repoParam,
         q: qParam || undefined,
+        bot: botParam === 'all' ? undefined : botParam === 'bots' ? '1' : '0',
         from: fromParam || undefined,
         to: toParam || undefined,
         page: page === 1 ? undefined : page,
       }),
-    [repoParam, qParam, fromParam, toParam, page],
+    [repoParam, qParam, botParam, fromParam, toParam, page],
   )
   const { data: overview } = useApi(getOverview, [])
 
@@ -79,6 +81,9 @@ export default function PeoplePage() {
   const handleRepoChange = (value: string) => {
     updateParams({ repo: value === 'all' ? null : value, page: null })
   }
+  const handleBotChange = (value: string) => {
+    updateParams({ bot: value === 'all' ? null : value, page: null })
+  }
   const handleFromChange = (value: string) => {
     updateParams({ from: value || null, page: null })
   }
@@ -90,7 +95,7 @@ export default function PeoplePage() {
     updateParams({ q: query.trim() || null, page: null })
   }
   const handleClearFilters = () => {
-    updateParams({ repo: null, q: null, from: null, to: null, page: null })
+    updateParams({ repo: null, q: null, bot: null, from: null, to: null, page: null })
     setQuery('')
   }
   const handlePageChange = (nextPage: number) => {
@@ -105,7 +110,7 @@ export default function PeoplePage() {
   const rows = data.rows
   const top10 = rows.slice(0, 10)
   const maxMerged = Math.max(1, ...top10.map((c) => c.merged))
-  const hasFilters = repoParam !== 'all' || !!qParam || !!fromParam || !!toParam
+  const hasFilters = repoParam !== 'all' || !!qParam || botParam !== 'all' || !!fromParam || !!toParam
   // Bus factor must be org-wide: page rows are filtered/paginated, so a share
   // computed from them is wrong. overview.hero.bus covers the whole org.
   const bus = overview?.hero?.bus
@@ -128,6 +133,16 @@ export default function PeoplePage() {
                 {r.name}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={botParam} onValueChange={handleBotChange}>
+          <SelectTrigger aria-label="Filter humans vs bots" className="max-w-36">
+            <SelectValue placeholder="Everyone" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Everyone</SelectItem>
+            <SelectItem value="humans">Humans only</SelectItem>
+            <SelectItem value="bots">Bots only</SelectItem>
           </SelectContent>
         </Select>
         <form onSubmit={handleSearch} className="flex items-center gap-2">

@@ -42,9 +42,14 @@ function MergedTip({ active, payload, label }: Partial<import('recharts').Toolti
   const entry = payload[0]
   if (entry?.value == null) return null
   const col = getPayloadColor(entry) ?? "var(--chart-1)"
+  const datum = (entry.payload as any) ?? {}
+  const lines =
+    typeof datum.additions === 'number' && typeof datum.deletions === 'number'
+      ? ` · +${comma(Math.round(datum.additions))} −${comma(Math.round(datum.deletions))} lines`
+      : ''
   return (
     <TipShell label={label}>
-      <TipRow color={col as string} label="Merged" value={`${comma(Number(entry.value))} PRs`} />
+      <TipRow color={col as string} label="Merged" value={`${comma(Number(entry.value))} PRs${lines}`} />
     </TipShell>
   )
 }
