@@ -85,13 +85,11 @@ type Run struct {
 
 Existing `state.json` rows without `runnerGroup` decode as `""` → `RunnerGroupOf` infers at read; new syncs write it. No migration script — first sync backfills new rows, read-time inference covers old rows. Document `omitempty` so `json.Marshal` on old readers ignores it.
 
-**Heuristic v1 (one-line tuning, substring allowlist, case-insensitive):**
+**Heuristic v2 (narrow allowlist + product cutoff, substring, case-insensitive):**
 
 ```go
 var homeSubstrings = []string{
-    "lint", "test", "build", "quality", "mutation",
-    "trivy", "docker", "integration", "e2e", "unit",
-    "hybrid", "home",
+    "self-hosted", "hybrid", "home",
 }
 
 func InferRunnerGroup(workflow string) RunnerGroup {
@@ -113,7 +111,16 @@ func InferRunnerGroup(workflow string) RunnerGroup {
 }
 ```
 
-Rationale: `gaia`'s `main.yml: select-runner` sends every compute lane (`build`, `test-python`, `test-typescript`, `code-quality`, `mutation`, `trivy`, `docker-image`) to `gaia-home` when idle; only `deploy-web` / `release` stay on `ubuntu-latest`. Substring allowlist captures that without fetching `jobs[*].labels`. It is repo-agnostic: non-`gaia` repos fall back to `github` gracefully (all workflows miss the allowlist → github), pie shows `github 100%` which is honest. Tuning is one line: add/remove substrings in `homeSubstrings`.
+Rationale (v2, corrected after fake-history incident): the v1 allowlist (`build`, `test`, `quality`…)
+matched ordinary GitHub-hosted workflows — e.g. "Quality Checks" contains "quality" — and painted
+home share back to March 2026 when home didn't exist (live late Aug 2026, hybrid-home-ci PR
+unmerged at that point). v2 only counts names that explicitly claim home hosting, plus a
+`homeCutoff = 2026-08-28` product cut-over in `RunnerGroupOf` that forces everything earlier to
+github, plus a stale-home guard that re-validates persisted `home` rows against the narrowed
+list. It is repo-agnostic: non-`gaia` repos fall back to `github` gracefully (all workflows miss
+the allowlist → github), pie shows `github 100%` which is honest. Tuning is one line:
+add/remove substrings in `homeSubstrings`. For exact fidelity (home-intended vs home-actual
+fallback), a follow-up `?strictRunner=1` can fetch jobs `labels` — reserved, not in v2.
 
 **Accuracy note:** a run that *should* have landed on home but fell back (`is_self_hosted==false`) will be misclassified as `home` by this heuristic. That is accepted for v1 — the slice still answers "which lanes are *intended* home" and the duration signal (home runs are 2–4× faster) will make fallback visible as p90 tail. A follow-up `?strictRunner=1` that fetches `GET /repos/{org}/{repo}/actions/runs/{id}/jobs` and reads `labels` → exact label is reserved, not in v1.
 
@@ -481,7 +488,7 @@ Details:
 
 Table-driven `*_test.go` alongside `metrics.go`/`github.go` (stdlib only, `since` injected, no network):
 
-- `TestInferRunnerGroup` — table: `"test-python"` → home, `"Build"` → home, `"Code Quality"` → home, `"Deploy Web"` → github, `"release"` → github, `""` → unknown, `"random"` → github, `"lint"` → home, case-fold `"TEST"` → home.
+- `TestInferRunnerGroup` — table (v2 narrow): `"hybrid-home-ci"` → home, `"self-hosted smoke"` → home, `"Home Deploy"` → home, `"test-python"` → github, `"Build"` → github, `"Code Quality"` → github, `"Quality Checks"` → github, `"Deploy Web"` → github, `"release"` → github, `""` → unknown, `"random"` → github, case-fold `"HYBRID"` → home.
 - `TestRunnerGroupOf_PersistedVsInferred` — Run with `RunnerGroup=github` returns github even when workflow would infer home; empty stored field infers.
 - `TestWorkflowHybridStats_Empty` — 0 runs → `[]`.
 - `TestWorkflowHybridStats_Known` — 2 workflows: A durations `[2,4,6,8,10,12,30]` (7 runs) → p50 8, p90 ~24.4, avg ~10.3, isSlow true on p90>25? borderline; B `[2,3,3,4,4,5]` → p50 ~3.5 not slow; assert slow-first ordering and thresholds.

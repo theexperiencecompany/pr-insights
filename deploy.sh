@@ -38,7 +38,7 @@ scp -q "$BIN" "${HOST}:/tmp/pr-insights.new"
 ssh "$HOST" "sudo mv -f /tmp/pr-insights.new ${REMOTE_DIR}/pr-insights && sudo chmod 755 ${REMOTE_DIR}/pr-insights"
 
 echo "==> writing ${ENV_FILE}"
-ssh "$HOST" "printf 'GITHUB_TOKEN=%s\nGITHUB_ORG=theexperiencecompany\nPR_INSIGHTS_ADDR=127.0.0.1:8787\nPR_INSIGHTS_DATA_DIR=/var/lib/pr-insights\nPR_INSIGHTS_SYNC_INTERVAL=6h\nENTIRE_BIN=/usr/local/bin/entire\nENTIRE_HOME=/var/lib/pr-insights/entire-home\nENTIRE_TOKEN_STORE=file\nENTIRE_SYNC_INTERVAL=15m\n' '${TOKEN}' | sudo tee ${ENV_FILE} >/dev/null && sudo chown root:root ${ENV_FILE} && sudo chmod 600 ${ENV_FILE}"
+ssh "$HOST" "printf 'GITHUB_TOKEN=%s\nGITHUB_ORG=theexperiencecompany\nPR_INSIGHTS_ADDR=0.0.0.0:8787\nPR_INSIGHTS_DATA_DIR=/var/lib/pr-insights\nPR_INSIGHTS_SYNC_INTERVAL=6h\nENTIRE_BIN=/usr/local/bin/entire\nENTIRE_HOME=/var/lib/pr-insights/entire-home\nENTIRE_TOKEN_STORE=file\nENTIRE_SYNC_INTERVAL=15m\n' '${TOKEN}' | sudo tee ${ENV_FILE} >/dev/null && sudo chown root:root ${ENV_FILE} && sudo chmod 600 ${ENV_FILE}"
 
 echo "==> installing entire CLI (agent checkpoint analytics)"
 ssh "$HOST" "sudo test -x /usr/local/bin/entire || curl -fsSL https://github.com/entireio/cli/releases/latest/download/entire_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin entire && sudo chmod 755 /usr/local/bin/entire"

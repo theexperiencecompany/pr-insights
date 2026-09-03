@@ -360,3 +360,16 @@ func queryInt(r *http.Request, key string, def int) int {
 	}
 	return v
 }
+
+// clampedPerPage reads ?per_page with a sane cap so dropdowns can fetch all
+// rows (e.g. author lists) without allowing unbounded pages.
+func clampedPerPage(r *http.Request) int {
+	pp := queryInt(r, "per_page", perPage)
+	if pp < 1 {
+		return perPage
+	}
+	if pp > 200 {
+		return 200
+	}
+	return pp
+}

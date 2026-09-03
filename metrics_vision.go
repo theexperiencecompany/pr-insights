@@ -974,17 +974,20 @@ const (
 )
 
 var homeSubstrings = []string{
-	"lint", "test", "build", "quality", "mutation",
-	"trivy", "docker", "integration", "e2e", "unit",
-	"hybrid", "home",
+	"self-hosted", "hybrid", "home",
 }
+
+// Keep this list narrow on purpose: broad substrings like "lint", "test",
+// "build" or "quality" match ordinary GitHub-hosted workflows (e.g.
+// "Quality Checks" contains "quality") and inflate home share. Only names
+// that explicitly claim home hosting count.
 
 // homeCutoff is the product cut-over when the self-hosted runner (gaia-home)
 // went live. Before this date every Run is treated as github-hosted even if
 // the heuristic would classify the workflow as home — this avoids fake
-// stacked history that shows 50% home back to March when home didn't exist.
+// stacked history that shows home share back to March when home didn't exist.
 // Product perspective: the experiment starts at cutoff, not at repo birth.
-var homeCutoff = time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+var homeCutoff = time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
 
 func InferRunnerGroup(workflow string) RunnerGroup {
 	if workflow == "" {
@@ -1025,6 +1028,11 @@ func RunnerGroupOf(r Run) RunnerGroup {
 		return RunnerGithub
 	}
 	if r.RunnerGroup != "" {
+		if r.RunnerGroup == RunnerHome && InferRunnerGroup(r.Workflow) != RunnerHome {
+			// Stale home: persisted at fetch time under an older, broader
+			// heuristic — the narrowed allowlist says github, trust it.
+			return RunnerGithub
+		}
 		return r.RunnerGroup
 	}
 	return InferRunnerGroup(r.Workflow)

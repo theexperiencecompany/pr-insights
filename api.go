@@ -400,7 +400,10 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 }
 
 // computeLeaderboards ranks pulls with optional filters: order direction,
-// repo, author and a merged-date window (from/to as YYYY-MM-DD).
+// repo, author and a date window (from/to as YYYY-MM-DD). The window matches
+// the state-relevant date: merged date for merged PRs, closed date for
+// closed PRs, opened date for open PRs — so combining a state filter with a
+// date window never silently returns empty.
 func computeLeaderboards(snap Data, metric Metric, state string, page int, asc bool, repo, author, from, to string) (rows []RankedPull, pg pager) {
 	pulls := PullsByState(snap.Pulls, state)
 	if repo != "" {
@@ -432,14 +435,23 @@ func computeLeaderboards(snap Data, metric Metric, state string, page int, asc b
 	if !fromT.IsZero() || !toT.IsZero() {
 		filtered := make([]Pull, 0, len(pulls))
 		for _, p := range pulls {
+			// State-relevant date: merged > closed > opened. Merged PRs keep
+			// exact old behaviour; open/closed PRs (nil MergedAt) now match
+			// their own date instead of being dropped silently.
 			t := p.MergedAt
 			if t == nil {
+				t = p.ClosedAt
+			}
+			var tt time.Time
+			if t != nil {
+				tt = *t
+			} else {
+				tt = p.CreatedAt
+			}
+			if !fromT.IsZero() && tt.Before(fromT) {
 				continue
 			}
-			if !fromT.IsZero() && t.Before(fromT) {
-				continue
-			}
-			if !toT.IsZero() && !t.Before(toT) {
+			if !toT.IsZero() && !tt.Before(toT) {
 				continue
 			}
 			filtered = append(filtered, p)
@@ -756,14 +768,23 @@ func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
 	if !fromT.IsZero() || !toT.IsZero() {
 		filtered := make([]Pull, 0, len(pulls))
 		for _, p := range pulls {
+			// State-relevant date: merged > closed > opened. Merged PRs keep
+			// exact old behaviour; open/closed PRs (nil MergedAt) now match
+			// their own date instead of being dropped silently.
 			t := p.MergedAt
 			if t == nil {
+				t = p.ClosedAt
+			}
+			var tt time.Time
+			if t != nil {
+				tt = *t
+			} else {
+				tt = p.CreatedAt
+			}
+			if !fromT.IsZero() && tt.Before(fromT) {
 				continue
 			}
-			if !fromT.IsZero() && t.Before(fromT) {
-				continue
-			}
-			if !toT.IsZero() && !t.Before(toT) {
+			if !toT.IsZero() && !tt.Before(toT) {
 				continue
 			}
 			filtered = append(filtered, p)
@@ -789,7 +810,7 @@ func (s *Server) handleAPIContributors(w http.ResponseWriter, r *http.Request) {
 		contribs = filtered
 	}
 
-	pg := paginate(len(contribs), page, perPage)
+	pg := paginate(len(contribs), page, clampedPerPage(r))
 	rows := contribs[pg.From:pg.To]
 	writeJSON(w, struct {
 		Rows        []Contributor `json:"rows"`
