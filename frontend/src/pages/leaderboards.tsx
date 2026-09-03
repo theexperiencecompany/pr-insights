@@ -191,16 +191,15 @@ export default function LeaderboardsPage() {
     updateParams({ author: value === 'all' ? null : value, page: null })
   }
 
-  // Type-to-search: commit only exact logins (server matches authors exactly);
-  // partial text stays local so the list doesn't flash empty while typing.
+  // Type-to-search: the server matches author substrings (case-insensitive),
+  // so every keystroke filters live; clearing resets to all authors.
   const [authorInput, setAuthorInput] = useState(authorParam === 'all' ? '' : authorParam)
   useEffect(() => {
     setAuthorInput(authorParam === 'all' ? '' : authorParam)
   }, [authorParam])
-  const knownLogins = new Set((contributors?.rows ?? []).map((c) => c.login))
   const handleAuthorInput = (value: string) => {
     setAuthorInput(value)
-    if (value === '' || knownLogins.has(value)) handleAuthorChange(value || 'all')
+    handleAuthorChange(value.trim() || 'all')
   }
 
   const handleRepoChange = (value: string) => {
@@ -364,7 +363,6 @@ export default function LeaderboardsPage() {
           <Input
             value={authorInput}
             onChange={(event) => handleAuthorInput(event.target.value)}
-            onBlur={() => setAuthorInput(authorParam === 'all' ? '' : authorParam)}
             placeholder="All authors — type to search"
             aria-label="Filter by author"
             className="w-44"

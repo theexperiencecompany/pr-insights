@@ -400,7 +400,8 @@ func computeOverviewVersion(snap Data, largestN int, gran Granularity, ver uint6
 }
 
 // computeLeaderboards ranks pulls with optional filters: order direction,
-// repo, author and a date window (from/to as YYYY-MM-DD). The window matches
+// repo, author substring (case-insensitive) and a date window (from/to as
+// YYYY-MM-DD). The window matches
 // the state-relevant date: merged date for merged PRs, closed date for
 // closed PRs, opened date for open PRs — so combining a state filter with a
 // date window never silently returns empty.
@@ -418,7 +419,7 @@ func computeLeaderboards(snap Data, metric Metric, state string, page int, asc b
 	if author != "" {
 		filtered := make([]Pull, 0, len(pulls))
 		for _, p := range pulls {
-			if p.Author == author {
+			if containsFold(p.Author, author) {
 				filtered = append(filtered, p)
 			}
 		}

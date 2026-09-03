@@ -497,12 +497,27 @@ function WhenWeShip({ overview }: { overview: OverviewData | undefined | null })
   const hourData = (dist?.hour ?? []).map((v, i) => ({ hour: `${i}h`, merged: v }))
   const peakDay = weekdayData.reduce((a, b) => (b.merged > a.merged ? b : a), { day: '—', merged: 0 })
   const peakHour = hourData.reduce((a, b) => (b.merged > a.merged ? b : a), { hour: '—', merged: 0 })
+  // Viewer-local peak: hourly buckets are server-zone aggregates with no date
+  // attached, so full re-bucketing would invent precision — convert the peak
+  // hour only, marked approximate.
+  let viewerPeak = ''
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const offsetH = -new Date().getTimezoneOffset() / 60
+    const utcH = Number.parseInt(String(peakHour.hour).replace('h', ''), 10)
+    if (Number.isFinite(utcH)) {
+      const localH = ((Math.round(utcH + offsetH) % 24) + 24) % 24
+      viewerPeak = ` · your peak ≈ ${localH}h (${tz})`
+    }
+  } catch {
+    viewerPeak = ''
+  }
   if (!dist || (peakDay.merged === 0 && peakHour.merged === 0)) return null
   return (
     <div className="mt-6">
       <SectionHeading>When we ship</SectionHeading>
       <p className="mt-1 text-xs text-muted-foreground">
-        Org-wide · times in {dist.zone || 'UTC'} · busiest {peakDay.day}s around {peakHour.hour} — ignores the repo and period filters above.
+        Org-wide · times in {dist.zone || 'UTC'} · busiest {peakDay.day}s around {peakHour.hour}{viewerPeak} — ignores the repo and period filters above.
       </p>
       <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ChartCard title="Merges by weekday">

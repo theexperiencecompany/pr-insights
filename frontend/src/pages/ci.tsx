@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Cell,
   Pie,
@@ -170,8 +172,28 @@ function HostSplitBar({ home, github, unknown }: { home: number; github: number;
   )
 }
 
-export default function CIPage() {
-  const [searchParams, setSearchParams] = useSearchParams()
+function TailTip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null
+  const raw = (payload[0]?.payload as any) ?? {}
+  const rows = [
+    { key: 'p50', label: 'p50', value: raw.p50, color: 'var(--chart-1)' },
+    { key: 'p90', label: 'p90', value: raw.p90, color: 'var(--chart-2)' },
+    { key: 'p95', label: 'p95', value: raw.p95, color: 'var(--chart-5)' },
+  ].filter((r) => typeof r.value === 'number' && Number.isFinite(r.value))
+  if (!rows.length) return null
+  return (
+    <TipShell label={raw.workflow ?? label}>
+      {rows.map((r) => (
+        <TipRow key={r.key} color={r.color} label={r.label} value={fmtDuration(r.value)} />
+      ))}
+      <div className="text-[11px] text-muted-foreground">
+        {comma(raw.runs ?? 0)} runs · queue {raw.queue != null ? fmtDuration(raw.queue) : '—'} · stacked p50 → p90 → p95
+      </div>
+    </TipShell>
+  )
+}
+
+export default function CIPage() {  const [searchParams, setSearchParams] = useSearchParams()
   const rawPeriod = searchParams.get('period')
   const period: Period = (PERIODS as readonly string[]).includes(rawPeriod as string) ? (rawPeriod as Period) : '6m'
   const rawGran = searchParams.get('gran')
@@ -265,6 +287,25 @@ export default function CIPage() {
     return [...data.workflows].sort((a, b) => b.budgetSharePct - a.budgetSharePct).slice(0, 8)
   }, [data])
   const maxBudget = Math.max(1, ...budgetTop.map((w) => w.budgetSharePct))
+  // Tail distribution: top lanes by p90 as stacked p50 → p90 → p95 ranges.
+  const tailTop = useMemo(() => {
+    if (!data) return []
+    return [...data.workflows]
+      .sort((a, b) => b.p90Min - a.p90Min)
+      .slice(0, 8)
+      .map((w) => ({
+        name: w.workflow.length > 22 ? `${w.workflow.slice(0, 21)}…` : w.workflow,
+        workflow: w.workflow,
+        p50: w.p50Min,
+        d90: Math.max(0, w.p90Min - w.p50Min),
+        d95: Math.max(0, (w.p95Min ?? w.p90Min) - w.p90Min),
+        p90: w.p90Min,
+        p95: w.p95Min ?? w.p90Min,
+        runs: w.runs,
+        queue: w.queueMedianMin,
+      }))
+  }, [data])
+  const maxTail = Math.max(1, ...tailTop.map((t) => t.p50 + t.d90 + t.d95))
 
   const handleSort = (k: string) => {
     setSortKey((s) => (s.key === k ? { key: k, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key: k, dir: 'desc' }))
@@ -552,6 +593,29 @@ export default function CIPage() {
                       </div>
                     </div>
                   ))}
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {/* Tail distribution — p50 → p90 → p95 stacked ranges per lane */}
+            {tailTop.length > 0 ? (
+              <Card className="mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base font-semibold">Tail distribution</CardTitle>
+                  <p className="text-xs text-muted-foreground">Top {tailTop.length} lanes by p90 · stacked ranges p50 → p90 → p95 in minutes · long pale tail means outliers dominate the lane</p>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer config={{ p50: { label: 'p50', color: 'var(--chart-1)' }, d90: { label: 'p50–p90', color: 'var(--chart-2)' }, d95: { label: 'p90–p95', color: 'var(--chart-5)' } }} className="h-[300px] w-full">
+                    <BarChart data={tailTop} layout="vertical" margin={{ left: 8, right: 12, top: 4, bottom: 4 }}>
+                      <CartesianGrid horizontal={false} />
+                      <XAxis type="number" tickLine={false} axisLine={false} tickMargin={8} domain={[0, maxTail]} tickFormatter={(v: number) => `${Math.round(v)}m`} />
+                      <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tickMargin={8} width={130} tick={{ fontSize: 11 }} />
+                      <ChartTooltip cursor={{ fill: 'var(--muted)' }} content={<TailTip />} />
+                      <Bar dataKey="p50" stackId="tail" fill="var(--color-p50)" radius={[3, 0, 0, 3]} />
+                      <Bar dataKey="d90" stackId="tail" fill="var(--color-d90)" />
+                      <Bar dataKey="d95" stackId="tail" fill="var(--color-d95)" radius={[0, 3, 3, 0]} />
+                    </BarChart>
+                  </ChartContainer>
                 </CardContent>
               </Card>
             ) : null}
