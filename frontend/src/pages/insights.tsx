@@ -102,7 +102,7 @@ function Filter({ label, children }: { label: string; children: ReactNode }) {
 const SHIP_SERIES: Record<string, { label: string; format: (v: number) => string; dashed?: boolean; description?: string }> = {
   merged: { label: 'Merged', format: (v) => `${comma(Math.round(v))} PRs` },
   ma: { label: 'Moving average', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Trailing moving average (prior 5wk/3mo, excludes current bucket)' },
-  forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Forecast linear extrap +1..+3 — not a prediction' },
+  forecast: { label: 'Forecast', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Blended forecast +1..+3 (trend + seasonal + Little\u2019s law) ±1σ band' },
   prev: { label: 'Last year', format: (v) => `${comma(Math.round(v))} PRs`, dashed: true, description: 'Last year' },
   lines: { label: 'Lines', format: (v) => `${comma(Math.round(v))} lines` },
   cycle: { label: 'Bucket median', format: (v) => `${v.toFixed(1)} days`, description: 'Median cycle of this bucket only — dashed line is the median across buckets' },
@@ -695,49 +695,129 @@ export default function InsightsPage() {
     [data],
   )
 
-  // merged chart data: merged + moving average + year-ago + forecast extension
-  // Tokens locked: merged --chart-1 solid fill, MA --chart-5 solid thin (trailing 5wk/3mo), prev --chart-3 dashed 4/4, forecast --chart-1 dashed 6/3 dimmed.
-  // Forecast is gated: only when n>=6 and user has toggled it ON (default OFF, persisted).
-  const mergedData = useMemo(() => {
-    if (!data) return []
+  // Forecast = 0.5·recency-weighted trend + 0.3·seasonal + 0.2·Little's-law level.
+  // Trailing window only (old regimes don't vote), seasonal scale from the
+  // year-ago series, ±1σ band from trailing residuals, backtested below.
+  const FORECAST_WINDOW = 12
+  const FORECAST_LAMBDA = 0.85
+  function weightedTrend(ys: number[]): { slope: number; intercept: number; sigma: number } {
+    const n = ys.length
+    const start = Math.max(0, n - FORECAST_WINDOW)
+    let sw = 0
+    let sx = 0
+    let sy = 0
+    let sxx = 0
+    let sxy = 0
+    for (let i = start; i < n; i++) {
+      const w = Math.pow(FORECAST_LAMBDA, n - 1 - i)
+      sw += w
+      sx += w * i
+      sy += w * ys[i]
+      sxx += w * i * i
+      sxy += w * i * ys[i]
+    }
+    const den = sw * sxx - sx * sx
+    const slope = den > 0 ? (sw * sxy - sx * sy) / den : 0
+    const intercept = sw > 0 ? (sy - slope * sx) / sw : 0
+    let sr = 0
+    let c = 0
+    for (let i = start; i < n; i++) {
+      const r = ys[i] - (slope * i + intercept)
+      sr += r * r
+      c++
+    }
+    return { slope, intercept, sigma: c > 1 ? Math.sqrt(sr / (c - 1)) : 0 }
+  }
+  function seasonalRatio(ys: number[], prev: (number | null)[]): number {
+    let s = 0
+    let c = 0
+    const start = Math.max(0, ys.length - FORECAST_WINDOW)
+    for (let i = start; i < ys.length; i++) {
+      const p = prev[i]
+      if (p != null && p > 0 && ys[i] >= 0) {
+        s += ys[i] / p
+        c++
+      }
+    }
+    if (c < 3) return 1
+    const r = s / c
+    return Number.isFinite(r) && r > 0 ? Math.min(3, Math.max(1 / 3, r)) : 1
+  }
+  function smape(f: number, a: number): number | null {
+    const d = Math.abs(f) + Math.abs(a)
+    if (d === 0) return null
+    return (2 * Math.abs(f - a)) / d
+  }
+  function forecastPoints(
+    ys: number[],
+    prev: (number | null)[],
+    little: number,
+    horizon: number,
+  ): { points: number[]; sigma: number } {
+    const { slope, intercept, sigma } = weightedTrend(ys)
+    const ratio = seasonalRatio(ys, prev)
+    const level = little > 0 ? little : null
+    const n = ys.length
+    const points: number[] = []
+    for (let k = 1; k <= horizon; k++) {
+      const x = n - 1 + k
+      const trend = slope * x + intercept
+      const seas = trend * ratio
+      const blend = 0.5 * trend + 0.3 * seas + 0.2 * (level ?? trend)
+      points.push(Math.max(0, blend))
+    }
+    return { points, sigma }
+  }
+  const { rows: mergedData, backtest: forecastBacktest } = useMemo(() => {
+    if (!data) return { rows: [], backtest: null as number | null }
     const window = gran === 'week' ? 5 : 3
-    const rows: { label: string; merged: number | null; ma: number | null; prev: number | null; forecast: number | null }[] = data.ship.map((b, i) => {
+    const rows: { label: string; merged: number | null; ma: number | null; prev: number | null; forecast: number | null; flo: number | null; fband: number | null }[] = data.ship.map((b, i) => {
       // Trailing average over the previous `window` buckets only — the current
       // bucket is excluded so "% vs moving avg" never compares a point to itself.
       const lo = Math.max(0, i - window)
       const slice = data.ship.slice(lo, i)
       const ma = slice.length ? slice.reduce((s, x) => s + x.merged, 0) / slice.length : null
-      return { label: b.label, merged: b.merged, ma: ma, prev: null, forecast: null }
+      return { label: b.label, merged: b.merged, ma: ma, prev: null, forecast: null, flo: null, fband: null }
     })
     if ((data.shipPrev ?? []).length === data.ship.length) {
       ;(data.shipPrev ?? []).forEach((b, i) => {
         rows[i].prev = b.merged
       })
     }
-    // least-squares forecast over merged, anchored to the last real point — gated n>=6 and explicit opt-in
+    // Blended forecast + backtest — gated n>=6 and explicit opt-in.
+    let backtest: number | null = null
     if (showForecast) {
       const ys = rows.map((r) => r.merged ?? 0)
+      const prevVals = rows.map((r) => r.prev)
       const n = ys.length
       if (n >= 6) {
-        const meanX = (n - 1) / 2
-        const meanY = ys.reduce((s, v) => s + v, 0) / n
-        let num = 0
-        let den = 0
-        ys.forEach((y, x) => {
-          num += (x - meanX) * (y - meanY)
-          den += (x - meanX) * (x - meanX)
-        })
-        const slope = den > 0 ? num / den : 0
-        const intercept = meanY - slope * meanX
+        const bucketDays = gran === 'week' ? 7 : 30.44
+        const little = (data.wip?.throughputPerDay ?? 0) * bucketDays
+        const { points, sigma } = forecastPoints(ys, prevVals, little, 3)
         // anchor: the forecast line starts exactly where the data ends
         rows[n - 1].forecast = rows[n - 1].merged
+        rows[n - 1].flo = rows[n - 1].merged
+        rows[n - 1].fband = 0
         for (let k = 1; k <= 3; k++) {
-          const x = n - 1 + k
-          rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: Math.max(0, slope * x + intercept) })
+          const f = points[k - 1]
+          const lo = Math.max(0, f - sigma)
+          rows.push({ label: `+${k}`, merged: null, ma: null, prev: null, forecast: f, flo: lo, fband: f + sigma - lo })
+        }
+        // backtest: refit on truncated history, score the held-out buckets
+        if (n >= 9) {
+          const errs: number[] = []
+          for (let h = 1; h <= 3; h++) {
+            const cut = n - h
+            if (cut < 6) break
+            const { points: bp } = forecastPoints(ys.slice(0, cut), prevVals.slice(0, cut), little, h)
+            const e = smape(bp[h - 1], ys[cut + h - 1])
+            if (e != null) errs.push(e)
+          }
+          if (errs.length > 0) backtest = (errs.reduce((s, v) => s + v, 0) / errs.length) * 100
         }
       }
     }
-    return rows
+    return { rows, backtest }
   }, [data, gran, showForecast])
 
   const cumulativeData = useMemo(
@@ -949,6 +1029,38 @@ export default function InsightsPage() {
                           style={{ opacity: 0.6 } as React.CSSProperties}
                         />
                       )}
+                      {showForecast && mergedData.some((r) => r.fband != null && r.fband > 0) && (
+                        <>
+                          <Area
+                            type="monotone"
+                            isAnimationActive={false}
+                            dataKey="flo"
+                            stackId="fband"
+                            stroke="none"
+                            fill="transparent"
+                            dot={false}
+                            connectNulls={false}
+                            activeDot={false}
+                            legendType="none"
+                            hide={Boolean(hidden.forecast)}
+                          />
+                          <Area
+                            type="monotone"
+                            isAnimationActive={false}
+                            dataKey="fband"
+                            stackId="fband"
+                            stroke="var(--color-forecast)"
+                            strokeOpacity={0.4}
+                            fill="var(--color-forecast)"
+                            fillOpacity={0.15}
+                            dot={false}
+                            connectNulls={false}
+                            activeDot={false}
+                            legendType="none"
+                            hide={Boolean(hidden.forecast)}
+                          />
+                        </>
+                      )}
                       {data && data.ship.length > 6 ? (
                         <Brush dataKey="label" height={24} fill="var(--muted)" stroke="var(--border)" travellerWidth={12} onChange={handleShipBrushChange} />
                       ) : null}
@@ -956,8 +1068,9 @@ export default function InsightsPage() {
                   </ChartContainer>
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[11px] text-muted-foreground">
-                      MA=trailing mean · Forecast=linear extrap +1..+3 — not a prediction
+                      MA=trailing mean · Forecast=½ trend + ⅓ seasonal + ⅕ Little&apos;s law, ±1σ band
                       {gran === 'week' ? ' · MA window 5wk' : ' · MA window 3mo'}
+                      {forecastBacktest != null ? ` · backtest sMAPE ${forecastBacktest.toFixed(0)}% (last 3)` : ''}
                     </p>
                     <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground">
                       <input
